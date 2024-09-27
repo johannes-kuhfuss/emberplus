@@ -1,0 +1,3283 @@
+/*
+** Copyright (C) 2001-2024 Zabbix SIA
+**
+** This program is free software: you can redistribute it and/or modify it under the terms of
+** the GNU Affero General Public License as published by the Free Software Foundation, version 3.
+**
+** This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+** without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+** See the GNU Affero General Public License for more details.
+**
+** You should have received a copy of the GNU Affero General Public License along with this program.
+** If not, see <https://www.gnu.org/licenses/>.
+**/
+
+package emberplus
+
+import (
+	"testing"
+
+	"github.com/google/go-cmp/cmp"
+	"github.com/johannes-kuhfuss/emberplus/asn1"
+)
+
+func TestElement_handleApplication(t *testing.T) {
+	t.Parallel()
+
+	type fields struct {
+		ElementType ElementType
+	}
+
+	type args struct {
+		decoder *asn1.Decoder
+	}
+
+	tests := []struct {
+		name         string
+		fields       fields
+		args         args
+		wantDecoder  *asn1.Decoder
+		wantElements *Element
+		wantErr      bool
+	}{
+		{
+			"+node",
+			fields{
+				ElementType: "node",
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x27, 0x31, 0x25, 0xA0, 0x16, 0x0C, 0x14, 0x52, 0x33, 0x4C,
+						0x41, 0x59, 0x56, 0x69, 0x72, 0x74, 0x75, 0x61, 0x6C, 0x50, 0x61, 0x74, 0x63, 0x68, 0x42, 0x61,
+						0x79, 0xA1, 0x02, 0x0C, 0x00, 0xA4, 0x02, 0x0C, 0x00, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					},
+				),
+			},
+			asn1.NewDecoder([]byte{}),
+			&Element{
+				IsOnline:    true,
+				Identifier:  "R3LAYVirtualPatchBay",
+				Path:        "1",
+				ElementType: "node",
+			},
+			false,
+		},
+		{
+			"+nodeEndless",
+			fields{
+				ElementType: "node",
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D,
+						0x70, 0x72, 0x65, 0x73, 0x73, 0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			asn1.NewDecoder([]byte{}),
+			&Element{
+				IsOnline:    true,
+				Identifier:  "Compressor",
+				Path:        "3",
+				ElementType: "node",
+			},
+			false,
+		},
+		{
+			"+endlessAdditional",
+			fields{
+				ElementType: "node",
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D,
+						0x70, 0x72, 0x65, 0x73, 0x73, 0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+						0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D,
+						0x70, 0x72, 0x65, 0x73, 0x73, 0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			asn1.NewDecoder(
+				[]byte{
+					0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D,
+					0x70, 0x72, 0x65, 0x73, 0x73, 0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+				},
+			),
+			&Element{
+				IsOnline:    true,
+				Identifier:  "Compressor",
+				Path:        "3",
+				ElementType: "node",
+			},
+			false,
+		},
+		{
+			"+full",
+			fields{
+				ElementType: "parameter",
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x07, 0x0D, 0x05, 0x01, 0x01, 0x02, 0x04, 0x02,
+
+						0xA1, 0x18, 0x31, 0x16, 0xA0, 0x06, 0x0C, 0x04, 0x43, 0x61, 0x6C, 0x6C, 0xAD,
+						0x03, 0x02, 0x01, 0x03, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA2, 0x02, 0x0C, 0x00,
+
+						0xA2, 0x80, 0x64, 0x80, 0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80,
+						0x31, 0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01,
+						0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+						0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31,
+						0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x31, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+						0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01,
+						0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x32, 0xA3,
+						0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80,
+						0xA0, 0x03, 0x02, 0x01, 0x04, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E,
+						0x64, 0x20, 0x33, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+						0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x05, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C,
+						0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x34, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+						0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x06, 0xA1, 0x80, 0x31,
+						0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x35, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+						0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			asn1.NewDecoder(
+				[]byte{0x00, 0x00},
+			),
+			&Element{
+				Path:        "1.1.2.4.2",
+				ElementType: "parameter",
+				Identifier:  "Call",
+				Value:       "",
+				Access:      3,
+				ValueType:   3,
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+					{
+						Path:        "2",
+						ElementType: "node",
+						Identifier:  "Band 1",
+						IsOnline:    true,
+					},
+					{
+						Path:        "3",
+						ElementType: "node",
+						Identifier:  "Band 2",
+						IsOnline:    true,
+					},
+					{
+						Path:        "4",
+						ElementType: "node",
+						Identifier:  "Band 3",
+						IsOnline:    true,
+					},
+					{
+						Path:        "5",
+						ElementType: "node",
+						Identifier:  "Band 4",
+						IsOnline:    true,
+					},
+					{
+						Path:        "6",
+						ElementType: "node",
+						Identifier:  "Band 5",
+						IsOnline:    true,
+					},
+				},
+			},
+			false,
+		},
+		{
+			"-readEndErr",
+			fields{
+				ElementType: "parameter",
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA2, 0x80, 0x64, 0x80, 0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80,
+						0x31, 0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01,
+						0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+						0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31,
+						0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x31, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+						0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01,
+						0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x32, 0xA3,
+						0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80,
+						0xA0, 0x03, 0x02, 0x01, 0x04, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E,
+						0x64, 0x20, 0x33, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+						0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x05, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C,
+						0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x34, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+						0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x06, 0xA1, 0x80, 0x31,
+						0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x35, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+						0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "parameter",
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+					{
+						Path:        "2",
+						ElementType: "node",
+						Identifier:  "Band 1",
+						IsOnline:    true,
+					},
+					{
+						Path:        "3",
+						ElementType: "node",
+						Identifier:  "Band 2",
+						IsOnline:    true,
+					},
+					{
+						Path:        "4",
+						ElementType: "node",
+						Identifier:  "Band 3",
+						IsOnline:    true,
+					},
+					{
+						Path:        "5",
+						ElementType: "node",
+						Identifier:  "Band 4",
+						IsOnline:    true,
+					},
+					{
+						Path:        "6",
+						ElementType: "node",
+						Identifier:  "Band 5",
+						IsOnline:    true,
+					},
+				},
+			},
+			true,
+		},
+		{
+			"-childErr",
+			fields{
+				ElementType: "parameter",
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA2, 0x18, 0x64, 0x80, 0xA0, 0x80, 0x61,
+					},
+				),
+			},
+			nil,
+			&Element{ElementType: "parameter"},
+			true,
+		},
+		{
+			"-contentErr",
+			fields{
+				ElementType: "parameter",
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA1, 0x18, 0x31, 0x16, 0xA0, 0x06, 0x0C, 0x04, 0x43, 0x61, 0x6C, 0x6C, 0xAD,
+						0x03, 0x02, 0x01, 0x03, 0xA5,
+					},
+				),
+			},
+			nil,
+			&Element{ElementType: "parameter"},
+			true,
+		},
+		{
+			"-pathErr",
+			fields{
+				ElementType: "parameter",
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x07, 0x0D, 0x05,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "parameter",
+			},
+			true,
+		},
+		{
+			"-empty",
+			fields{
+				ElementType: "parameter",
+			},
+			args{
+				asn1.NewDecoder([]byte{}),
+			},
+			nil,
+			&Element{ElementType: "parameter"},
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{
+				ElementType: tt.fields.ElementType,
+			}
+			got, err := el.handleApplication(tt.args.decoder)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.handleApplication() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.wantElements, el); diff != "" {
+				t.Fatalf("Decoder.handleApplication() Element = %s", diff)
+			}
+
+			if diff := cmp.Diff(tt.wantDecoder.Bytes(), got.Bytes()); diff != "" {
+				t.Fatalf("Decoder.handleApplication() Decoder = %s", diff)
+			}
+		})
+	}
+}
+
+func TestElement_handleChildren(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		decoder *asn1.Decoder
+	}
+
+	tests := []struct {
+		name         string
+		args         args
+		wantDecoders []*asn1.Decoder
+		wantElement  *Element
+		wantErr      bool
+	}{
+		{
+			"+valid",
+			args{
+				asn1.NewDecoder([]byte{
+					0xA2, 0x80, 0x64, 0x80, 0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80, 0x31,
+					0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01, 0x01,
+					0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31, 0x80,
+					0xA0, 0x0F, 0x0C, 0x0D, 0x43, 0x6F, 0x72, 0x72, 0x20, 0x47, 0x61, 0x69, 0x6E, 0x5B, 0x64, 0x42,
+					0x5D, 0xAD, 0x03, 0x02, 0x01, 0x01, 0xA2, 0x03, 0x02, 0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03,
+					0xA9, 0x03, 0x01, 0x01, 0xFF, 0xA4, 0x03, 0x02, 0x01, 0x00, 0xA3, 0x03, 0x02, 0x01, 0xF4, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x03,
+					0xA1, 0x80, 0x31, 0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D, 0x70, 0x72, 0x65, 0x73, 0x73,
+					0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0,
+					0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x04, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x0A, 0x0C, 0x08,
+					0x45, 0x78, 0x70, 0x61, 0x6E, 0x64, 0x65, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x05, 0xA1, 0x80,
+					0x31, 0x80, 0xA0, 0x06, 0x0C, 0x04, 0x47, 0x61, 0x74, 0x65, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x06,
+					0xA1, 0x80, 0x31, 0x80, 0xA0, 0x09, 0x0C, 0x07, 0x44, 0x65, 0x45, 0x73, 0x73, 0x65, 0x72, 0xA3,
+					0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				}),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+					{
+						Path:        "2",
+						ElementType: "parameter",
+						Identifier:  "Corr Gain[dB]",
+						Maximum:     int64(0),
+						Minimum:     int64(-12),
+						Value:       0,
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   1,
+					},
+					{
+						Path:        "3",
+						ElementType: "node",
+						Identifier:  "Compressor",
+						IsOnline:    true,
+					},
+					{
+						Path:        "4",
+						ElementType: "node",
+						Identifier:  "Expander",
+						IsOnline:    true,
+					},
+					{
+						Path:        "5",
+						ElementType: "node",
+						Identifier:  "Gate",
+						IsOnline:    true,
+					},
+					{
+						Path:        "6",
+						ElementType: "node",
+						Identifier:  "DeEsser",
+						IsOnline:    true,
+					},
+				},
+			},
+			false,
+		},
+		{
+			"-childWholeContentEndError",
+			args{
+				asn1.NewDecoder([]byte{
+					0xA2, 0x80, 0x64, 0x80, 0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80,
+					0x31, 0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01,
+					0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31,
+					0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x31, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01,
+					0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x32, 0xA3,
+					0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80,
+					0xA0, 0x03, 0x02, 0x01, 0x04, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E,
+					0x64, 0x20, 0x33, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x05, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C,
+					0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x34, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x06, 0xA1, 0x80, 0x31,
+					0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x35, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				}),
+			},
+			nil,
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+					{
+						Path:        "2",
+						ElementType: "node",
+						Identifier:  "Band 1",
+						IsOnline:    true,
+					},
+					{
+						Path:        "3",
+						ElementType: "node",
+						Identifier:  "Band 2",
+						IsOnline:    true,
+					},
+					{
+						Path:        "4",
+						ElementType: "node",
+						Identifier:  "Band 3",
+						IsOnline:    true,
+					},
+					{
+						Path:        "5",
+						ElementType: "node",
+						Identifier:  "Band 4",
+						IsOnline:    true,
+					},
+					{
+						Path:        "6",
+						ElementType: "node",
+						Identifier:  "Band 5",
+						IsOnline:    true,
+					},
+				},
+			},
+			true,
+		},
+		{
+			"-childCurrentContentEndError",
+			args{
+				asn1.NewDecoder([]byte{
+					0xA2, 0x80, 0x64, 0x80, 0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80,
+					0x31, 0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01,
+					0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31,
+					0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x31, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01,
+					0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x32, 0xA3,
+					0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80,
+					0xA0, 0x03, 0x02, 0x01, 0x04, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E,
+					0x64, 0x20, 0x33, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x05, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C,
+					0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x34, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x06, 0xA1, 0x80, 0x31,
+					0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x35, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				}),
+			},
+			nil,
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+					{
+						Path:        "2",
+						ElementType: "node",
+						Identifier:  "Band 1",
+						IsOnline:    true,
+					},
+					{
+						Path:        "3",
+						ElementType: "node",
+						Identifier:  "Band 2",
+						IsOnline:    true,
+					},
+					{
+						Path:        "4",
+						ElementType: "node",
+						Identifier:  "Band 3",
+						IsOnline:    true,
+					},
+					{
+						Path:        "5",
+						ElementType: "node",
+						Identifier:  "Band 4",
+						IsOnline:    true,
+					},
+					{
+						Path:        "6",
+						ElementType: "node",
+						Identifier:  "Band 5",
+						IsOnline:    true,
+					},
+				},
+			},
+			true,
+		},
+		{
+			"-childCurrentContextEndError",
+			args{
+				asn1.NewDecoder([]byte{
+					0xA2, 0x80, 0x64, 0x80, 0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80,
+					0x31, 0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01,
+					0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31,
+					0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x31, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01,
+					0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x32, 0xA3,
+					0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80,
+					0xA0, 0x03, 0x02, 0x01, 0x04, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E,
+					0x64, 0x20, 0x33, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x05, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C,
+					0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x34, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x06, 0xA1, 0x80, 0x31,
+					0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x35, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					0x00, 0x00, 0x00, 0x00, 0x00,
+				}),
+			},
+			nil,
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+					{
+						Path:        "2",
+						ElementType: "node",
+						Identifier:  "Band 1",
+						IsOnline:    true,
+					},
+					{
+						Path:        "3",
+						ElementType: "node",
+						Identifier:  "Band 2",
+						IsOnline:    true,
+					},
+					{
+						Path:        "4",
+						ElementType: "node",
+						Identifier:  "Band 3",
+						IsOnline:    true,
+					},
+					{
+						Path:        "5",
+						ElementType: "node",
+						Identifier:  "Band 4",
+						IsOnline:    true,
+					},
+					{
+						Path:        "6",
+						ElementType: "node",
+						Identifier:  "Band 5",
+						IsOnline:    true,
+					},
+				},
+			},
+			true,
+		},
+		{
+			"-notEnoughChildData",
+			args{
+				asn1.NewDecoder([]byte{
+					0xA2, 0x80, 0x64, 0x80, 0xA0, 0x80, 0x61, 0x80,
+				}),
+			},
+			nil,
+			&Element{},
+			true,
+		},
+		{
+			"-notEnoughCollectionData",
+			args{
+				asn1.NewDecoder([]byte{
+					0xA2, 0x80, 0x64, 0x40, 0xA0, 0x80, 0x61,
+				}),
+			},
+			nil,
+			&Element{},
+			true,
+		},
+		{
+			"-empty",
+			args{
+				asn1.NewDecoder([]byte{}),
+			},
+			nil,
+			&Element{},
+			true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{}
+			got, err := el.handleChildren(tt.args.decoder)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.handleChildren() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.wantElement, el); diff != "" {
+				t.Fatalf("Element.handleChildren() got = %s", diff)
+			}
+
+			if len(tt.wantDecoders) != len(got) {
+				t.Fatalf(
+					"Element.handleChildren() = incorrect got %d and expected slice len %d",
+					len(got), len(tt.wantDecoders),
+				)
+			}
+
+			for i, g := range got {
+				if diff := cmp.Diff(tt.wantDecoders[i].Bytes(), g.Bytes()); diff != "" {
+					t.Fatalf("Element.handleChildren() out decoders do not match at %d = %s", i, diff)
+				}
+			}
+		})
+	}
+}
+
+func TestElement_setChild(t *testing.T) {
+	t.Parallel()
+
+	type fields struct {
+		Children []*Element
+	}
+
+	type args struct {
+		childrenDecoder *asn1.Decoder
+	}
+
+	tests := []struct {
+		name         string
+		fields       fields
+		args         args
+		wantDecoders []*asn1.Decoder
+		wantElement  *Element
+		wantErr      bool
+	}{
+		{
+			"+valid",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x04, 0x0C,
+						0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01, 0x01, 0x00, 0xA5, 0x03, 0x02,
+						0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+				},
+			},
+			false,
+		},
+		{
+			"+withLimitByte",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x40, 0x6A, 0x3E, 0xA0, 0x04, 0x0D, 0x02, 0x01, 0x00, 0xA1, 0x36, 0x31, 0x34, 0xA0, 0x0A,
+						0x0C, 0x08, 0x69, 0x64, 0x65, 0x6E, 0x74, 0x69, 0x74, 0x79, 0xA1, 0x02, 0x0C, 0x00, 0xA4, 0x1D,
+						0x0C, 0x1B, 0x64, 0x65, 0x2E, 0x6C, 0x2D, 0x73, 0x2D, 0x62, 0x2E, 0x65, 0x6D, 0x62, 0x65, 0x72,
+						0x70, 0x6C, 0x75, 0x73, 0x2E, 0x69, 0x64, 0x65, 0x6E, 0x74, 0x69, 0x74, 0x79, 0xA3, 0x03, 0x01,
+						0x01, 0xFF,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1.0",
+						ElementType: "qualified_node",
+						Identifier:  "identity",
+						IsOnline:    true,
+						Access:      0,
+						ValueType:   0,
+					},
+				},
+			},
+			false,
+		},
+		{
+			"+withLimitByteWithLeftover",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x40, 0x6A, 0x3E, 0xA0, 0x04, 0x0D, 0x02, 0x01, 0x00, 0xA1, 0x36, 0x31, 0x34, 0xA0, 0x0A,
+						0x0C, 0x08, 0x69, 0x64, 0x65, 0x6E, 0x74, 0x69, 0x74, 0x79, 0xA1, 0x02, 0x0C, 0x00, 0xA4, 0x1D,
+						0x0C, 0x1B, 0x64, 0x65, 0x2E, 0x6C, 0x2D, 0x73, 0x2D, 0x62, 0x2E, 0x65, 0x6D, 0x62, 0x65, 0x72,
+						0x70, 0x6C, 0x75, 0x73, 0x2E, 0x69, 0x64, 0x65, 0x6E, 0x74, 0x69, 0x74, 0x79, 0xA3, 0x03, 0x01,
+						0x01, 0xFF, 0x01, 0x02, 0x03,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{0x01, 0x02, 0x03}),
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1.0",
+						ElementType: "qualified_node",
+						Identifier:  "identity",
+						IsOnline:    true,
+						Access:      0,
+						ValueType:   0,
+					},
+				},
+			},
+			false,
+		},
+		{
+			"+withNoLimitByteWithLeftover",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x6A, 0x3E, 0xA0, 0x04, 0x0D, 0x02, 0x01, 0x00, 0xA1, 0x36, 0x31, 0x34, 0xA0, 0x0A,
+						0x0C, 0x08, 0x69, 0x64, 0x65, 0x6E, 0x74, 0x69, 0x74, 0x79, 0xA1, 0x02, 0x0C, 0x00, 0xA4, 0x1D,
+						0x0C, 0x1B, 0x64, 0x65, 0x2E, 0x6C, 0x2D, 0x73, 0x2D, 0x62, 0x2E, 0x65, 0x6D, 0x62, 0x65, 0x72,
+						0x70, 0x6C, 0x75, 0x73, 0x2E, 0x69, 0x64, 0x65, 0x6E, 0x74, 0x69, 0x74, 0x79, 0xA3, 0x03, 0x01,
+						0x01, 0xFF, 0x00, 0x00, 0x01, 0x02, 0x03,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{0x00, 0x00, 0x01, 0x02, 0x03}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1.0",
+						ElementType: "qualified_node",
+						Identifier:  "identity",
+						IsOnline:    true,
+						Access:      0,
+						ValueType:   0,
+					},
+				},
+			},
+			false,
+		},
+		{
+			"+withNoLimitByteWithElementLeftover",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x6A, 0x80, 0xA0, 0x04, 0x0D, 0x02, 0x01, 0x00, 0xA1, 0x36, 0x31, 0x34, 0xA0, 0x0A,
+						0x0C, 0x08, 0x69, 0x64, 0x65, 0x6E, 0x74, 0x69, 0x74, 0x79, 0xA1, 0x02, 0x0C, 0x00, 0xA4, 0x1D,
+						0x0C, 0x1B, 0x64, 0x65, 0x2E, 0x6C, 0x2D, 0x73, 0x2D, 0x62, 0x2E, 0x65, 0x6D, 0x62, 0x65, 0x72,
+						0x70, 0x6C, 0x75, 0x73, 0x2E, 0x69, 0x64, 0x65, 0x6E, 0x74, 0x69, 0x74, 0x79, 0xA3, 0x03, 0x01,
+						0x01, 0xFF, 0x00, 0x00, 0x01, 0x02, 0x03,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{0x01, 0x02, 0x03}),
+			},
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1.0",
+						ElementType: "qualified_node",
+						Identifier:  "identity",
+						IsOnline:    true,
+						Access:      0,
+						ValueType:   0,
+					},
+				},
+			},
+			false,
+		},
+		{
+			"+additionalData",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80,
+						0x31, 0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01,
+						0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+						0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x0F, 0x0C,
+						0x0D, 0x43, 0x6F, 0x72, 0x72, 0x20, 0x47, 0x61, 0x69, 0x6E, 0x5B, 0x64, 0x42, 0x5D, 0xAD, 0x03,
+						0x02, 0x01, 0x01, 0xA2, 0x03, 0x02, 0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01,
+						0x01, 0xFF, 0xA4, 0x03, 0x02, 0x01, 0x00, 0xA3, 0x03, 0x02, 0x01, 0xF4, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{
+					0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31,
+					0x80, 0xA0, 0x0F, 0x0C, 0x0D, 0x43, 0x6F, 0x72, 0x72, 0x20, 0x47, 0x61, 0x69, 0x6E, 0x5B, 0x64,
+					0x42, 0x5D, 0xAD, 0x03, 0x02, 0x01, 0x01, 0xA2, 0x03, 0x02, 0x01, 0x00, 0xA5, 0x03, 0x02, 0x01,
+					0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0xA4, 0x03, 0x02, 0x01, 0x00, 0xA3, 0x03, 0x02, 0x01, 0xF4,
+					0x00, 0x00, 0x00, 0x00,
+				}),
+			},
+			&Element{
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+				},
+			},
+			false,
+		},
+		{
+			"-invalidElement",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03},
+				),
+			},
+			nil,
+			&Element{},
+			true,
+		},
+		{
+			"-empty",
+			fields{},
+			args{asn1.NewDecoder([]byte{})},
+			nil,
+			&Element{},
+			true,
+		},
+	}
+	//nolint:dupl
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{
+				Children: tt.fields.Children,
+			}
+			got, err := el.setChild(tt.args.childrenDecoder)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.setChild() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.wantElement, el); diff != "" {
+				t.Fatalf("Element.setChild() got = %s", diff)
+			}
+
+			if len(tt.wantDecoders) != len(got) {
+				t.Fatalf(
+					"Element.setChild() = incorrect got %d and expected slice len %d",
+					len(got), len(tt.wantDecoders),
+				)
+			}
+
+			for i, g := range got {
+				if diff := cmp.Diff(tt.wantDecoders[i].Bytes(), g.Bytes()); diff != "" {
+					t.Fatalf("Element.setChild() out decoders do not match at %d = %s", i, diff)
+				}
+			}
+		})
+	}
+}
+
+func TestElement_handleContent(t *testing.T) {
+	t.Parallel()
+
+	type fields struct {
+		ElementType ElementType
+	}
+
+	type args struct {
+		c *asn1.Decoder
+	}
+
+	tests := []struct {
+		name         string
+		fields       fields
+		args         args
+		wantDecoder  []*asn1.Decoder
+		wantElements *Element
+		wantErr      bool
+	}{
+		{
+			"+valid",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xa1, 0x27, 0x31, 0x25, 0xA0, 0x16, 0x0C, 0x14, 0x52, 0x33, 0x4C, 0x41, 0x59, 0x56, 0x69, 0x72,
+						0x74, 0x75, 0x61, 0x6C, 0x50, 0x61, 0x74, 0x63, 0x68, 0x42, 0x61, 0x79, 0xA1, 0x02, 0x0C, 0x00,
+						0xA4, 0x02, 0x0C, 0x00, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					},
+				),
+			},
+			[]*asn1.Decoder{asn1.NewDecoder([]byte{}), asn1.NewDecoder([]byte{}), asn1.NewDecoder([]byte{})},
+			&Element{
+				IsOnline:    true,
+				ElementType: "node",
+				Identifier:  "R3LAYVirtualPatchBay",
+			},
+			false,
+		},
+		{
+			"+validEndless",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xa1, 0x80, 0x31, 0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D, 0x70, 0x72, 0x65, 0x73,
+						0x73, 0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{asn1.NewDecoder([]byte{}), asn1.NewDecoder([]byte{}), asn1.NewDecoder([]byte{})},
+			&Element{
+				IsOnline:    true,
+				ElementType: "node",
+				Identifier:  "Compressor",
+			},
+			false,
+		},
+		{
+			"+validEndlessWithLeftover",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xa1, 0x80, 0x31, 0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D, 0x70, 0x72,
+						0x65, 0x73, 0x73, 0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x31,
+						0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D, 0x70, 0x72, 0x65, 0x73, 0x73,
+						0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder(
+					[]byte{
+						0x31, 0x80, 0xA0, 0x0C, 0x0C, 0x0A, 0x43, 0x6F, 0x6D, 0x70, 0x72, 0x65, 0x73,
+						0x73, 0x6F, 0x72, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			&Element{
+				IsOnline:    true,
+				ElementType: "node",
+				Identifier:  "Compressor",
+			},
+			false,
+		},
+		{
+			"-multipleDecodersWithDataErrors",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA1, 0x18, 0x31, 0x16, 0xA0, 0x06, 0x0C, 0x04, 0x43, 0x61, 0x6C, 0x6C, 0xAD,
+						0x03, 0x02, 0x01, 0x03, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA2, 0x02, 0x0C, 0x00,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "node",
+				Identifier:  "Call",
+			},
+			true,
+		},
+		{
+			"-notEnoughData",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xa1, 0x80, 0x31,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "node",
+			},
+			true,
+		},
+		{
+			"-missingEnd",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xa1, 0x80, 0x31, 0x80, 0xA0, 0x80, 0x0C, 0x0A, 0x43, 0x6F, 0x6D, 0x70, 0x72,
+						0x65, 0x73, 0x73, 0x6F, 0x72, 0x00,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "node",
+				Identifier:  "Compressor",
+			},
+			true,
+		},
+		{
+			"-notEnoughSetData",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xa1, 0x80, 0x31, 0x80,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "node",
+			},
+			true,
+		},
+		{
+			"-empty",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{},
+				),
+			},
+			[]*asn1.Decoder{},
+			&Element{ElementType: "node"},
+			true,
+		},
+	}
+	//nolint:dupl
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{
+				ElementType: tt.fields.ElementType,
+			}
+			got, err := el.handleContent(tt.args.c)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.handleContent() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.wantElements, el); diff != "" {
+				t.Fatalf("Decoder.handleContent() = %s", diff)
+			}
+
+			if len(tt.wantDecoder) != len(got) {
+				t.Fatalf(
+					"Decoder.handleContent() = incorrect got %d and expected slice len %d",
+					len(got), len(tt.wantDecoder),
+				)
+			}
+
+			for i, g := range got {
+				if diff := cmp.Diff(tt.wantDecoder[i].Bytes(), g.Bytes()); diff != "" {
+					t.Fatalf("Decoder.handleContent() out decoders do not match at %d = %s", i, diff)
+				}
+			}
+		})
+	}
+}
+
+func TestElement_handleContentContext(t *testing.T) {
+	t.Parallel()
+
+	type fields struct {
+		ElementType ElementType
+	}
+
+	type args struct {
+		decoder *asn1.Decoder
+	}
+
+	tests := []struct {
+		name        string
+		fields      fields
+		args        args
+		wantDecoder []*asn1.Decoder
+		wantElement *Element
+		wantErr     bool
+	}{
+		{
+			"+node",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x16, 0x0C, 0x14, 0x52, 0x33, 0x4C, 0x41, 0x59, 0x56, 0x69, 0x72, 0x74, 0x75, 0x61,
+						0x6C, 0x50, 0x61, 0x74, 0x63, 0x68, 0x42, 0x61, 0x79,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				ElementType: "node",
+				Identifier:  "R3LAYVirtualPatchBay",
+			},
+			false,
+		},
+		{
+			"+nodeLeftover",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x16, 0x0C, 0x14, 0x52, 0x33, 0x4C, 0x41, 0x59, 0x56, 0x69, 0x72, 0x74, 0x75, 0x61,
+						0x6C, 0x50, 0x61, 0x74, 0x63, 0x68, 0x42, 0x61, 0x79, 0xA1, 0x02, 0x0C, 0x00, 0xA4, 0x02, 0x0C,
+						0x00, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{0xa1, 0x02, 0x0c, 0x00, 0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				ElementType: "node",
+				Identifier:  "R3LAYVirtualPatchBay",
+			},
+			false,
+		},
+		{
+			"+nodeNoLenByte",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x14, 0x52, 0x33, 0x4C, 0x41, 0x59, 0x56, 0x69, 0x72, 0x74, 0x75, 0x61,
+						0x6C, 0x50, 0x61, 0x74, 0x63, 0x68, 0x42, 0x61, 0x79, 0x00, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder(
+					[]byte{},
+				),
+				asn1.NewDecoder(
+					[]byte{0x00, 0x00},
+				),
+			},
+			&Element{
+				ElementType: "node",
+				Identifier:  "R3LAYVirtualPatchBay",
+			},
+			false,
+		},
+		{
+			"+nodeNoLenByteLeftover",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x14, 0x52, 0x33, 0x4C, 0x41, 0x59, 0x56, 0x69, 0x72, 0x74, 0x75, 0x61,
+						0x6C, 0x50, 0x61, 0x74, 0x63, 0x68, 0x42, 0x61, 0x79, 0x00, 0x00, 0xA1, 0x02, 0x0C, 0x00, 0xA4,
+						0x02, 0x0C, 0x00, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder(
+					[]byte{},
+				),
+				asn1.NewDecoder(
+					[]byte{0x00, 0x00, 0xa1, 0x02, 0x0c, 0x00, 0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff},
+				),
+			},
+			&Element{
+				ElementType: "node",
+				Identifier:  "R3LAYVirtualPatchBay",
+			},
+			false,
+		},
+		{
+			"+qualifiedParameter",
+			fields{
+				ElementType: asn1.QualifiedParameterType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x06, 0x0C, 0x04, 0x43, 0x61, 0x6C, 0x6C,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				ElementType: "qualified_parameter",
+				Identifier:  "Call",
+			},
+			false,
+		},
+		{
+			"+qualifiedParameterLeftover",
+			fields{
+				ElementType: asn1.QualifiedParameterType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x06, 0x0C, 0x04, 0x43, 0x61, 0x6C, 0x6C, 0xAD, 0x03, 0x02, 0x01, 0x03, 0xA5, 0x03, 0x02,
+						0x01, 0x03, 0xA2, 0x02, 0x0C, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{
+					0xAD, 0x03, 0x02, 0x01, 0x03, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA2, 0x02, 0x0C, 0x00,
+				}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				ElementType: "qualified_parameter",
+				Identifier:  "Call",
+			},
+			false,
+		},
+		{
+			"+qualifiedParameterNoLen",
+			fields{
+				ElementType: asn1.QualifiedParameterType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x04, 0x43, 0x61, 0x6C, 0x6C, 0x00, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{
+					0x00, 0x00,
+				}),
+			},
+			&Element{
+				ElementType: "qualified_parameter",
+				Identifier:  "Call",
+			},
+			false,
+		},
+		{
+			"+qualifiedParameterNoLenLeftover",
+			fields{
+				ElementType: asn1.QualifiedParameterType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x04, 0x43, 0x61, 0x6C, 0x6C, 0x00, 0x00, 0xAD, 0x03, 0x02, 0x01, 0x03, 0xA5,
+						0x03, 0x02, 0x01, 0x03, 0xA2, 0x02, 0x0C, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{
+					0x00, 0x00, 0xAD, 0x03, 0x02, 0x01, 0x03, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA2, 0x02, 0x0C, 0x00,
+				}),
+			},
+			&Element{
+				ElementType: "qualified_parameter",
+				Identifier:  "Call",
+			},
+			false,
+		},
+		{
+			"+function",
+			fields{
+				ElementType: asn1.FunctionType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x0E, 0x0C, 0x0C, 0x43, 0x61, 0x6C, 0x6C, 0x46, 0x72, 0x6F, 0x6D, 0x4A, 0x53, 0x4F, 0x4E,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				ElementType: "function",
+				Identifier:  "CallFromJSON",
+			},
+			false,
+		},
+		{
+			"+functionLeftover",
+			fields{
+				ElementType: asn1.FunctionType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x0E, 0x0C, 0x0C, 0x43, 0x61, 0x6C, 0x6C, 0x46, 0x72, 0x6F, 0x6D, 0x4A, 0x53, 0x4F, 0x4E,
+						0xA2, 0x17, 0x30, 0x15, 0xA0, 0x13, 0x75, 0x11, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x0A, 0x0C,
+						0x08, 0x70, 0x61, 0x72, 0x73, 0x4A, 0x53, 0x4F, 0x4E, 0xA3, 0x19, 0x30, 0x17, 0xA0, 0x15, 0x75,
+						0x13, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x0C, 0x0C, 0x0A, 0x72, 0x65, 0x73, 0x75, 0x6C, 0x74,
+						0x4A, 0x53, 0x4F, 0x4E,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{
+					0xA2, 0x17, 0x30, 0x15, 0xA0, 0x13, 0x75, 0x11, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x0A, 0x0C,
+					0x08, 0x70, 0x61, 0x72, 0x73, 0x4A, 0x53, 0x4F, 0x4E, 0xA3, 0x19, 0x30, 0x17, 0xA0, 0x15, 0x75,
+					0x13, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x0C, 0x0C, 0x0A, 0x72, 0x65, 0x73, 0x75, 0x6C, 0x74,
+					0x4A, 0x53, 0x4F, 0x4E,
+				}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				ElementType: "function",
+				Identifier:  "CallFromJSON",
+			},
+			false,
+		},
+		{
+			"+functionNoLenByte",
+			fields{
+				ElementType: asn1.FunctionType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x0C, 0x43, 0x61, 0x6C, 0x6C, 0x46, 0x72, 0x6F, 0x6D, 0x4A, 0x53, 0x4F, 0x4E,
+						0x00, 0x00,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{0x00, 0x00}),
+			},
+			&Element{
+				ElementType: "function",
+				Identifier:  "CallFromJSON",
+			},
+			false,
+		},
+		{
+			"+functionNoLenByteLeftover",
+			fields{
+				ElementType: asn1.FunctionType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x0C, 0x43, 0x61, 0x6C, 0x6C, 0x46, 0x72, 0x6F, 0x6D, 0x4A, 0x53, 0x4F, 0x4E,
+						0x00, 0x00, 0xA2, 0x17, 0x30, 0x15, 0xA0, 0x13, 0x75, 0x11, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1,
+						0x0A, 0x0C, 0x08, 0x70, 0x61, 0x72, 0x73, 0x4A, 0x53, 0x4F, 0x4E, 0xA3, 0x19, 0x30, 0x17, 0xA0,
+						0x15, 0x75, 0x13, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x0C, 0x0C, 0x0A, 0x72, 0x65, 0x73, 0x75,
+						0x6C, 0x74, 0x4A, 0x53, 0x4F, 0x4E,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{
+					0x00, 0x00, 0xA2, 0x17, 0x30, 0x15, 0xA0, 0x13, 0x75, 0x11, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1,
+					0x0A, 0x0C, 0x08, 0x70, 0x61, 0x72, 0x73, 0x4A, 0x53, 0x4F, 0x4E, 0xA3, 0x19, 0x30, 0x17, 0xA0,
+					0x15, 0x75, 0x13, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x0C, 0x0C, 0x0A, 0x72, 0x65, 0x73, 0x75,
+					0x6C, 0x74, 0x4A, 0x53, 0x4F, 0x4E,
+				}),
+			},
+			&Element{
+				ElementType: "function",
+				Identifier:  "CallFromJSON",
+			},
+			false,
+		},
+		{
+			"+NoFieldsSet",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xa1, 0x02, 0x0c, 0x00, 0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff}),
+				asn1.NewDecoder([]byte{}),
+			},
+			&Element{
+				ElementType: "node",
+			},
+			false,
+		},
+		{
+			"-invalidNode",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x14, 0x52, 0x33,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "node",
+			},
+			true,
+		},
+		{
+			"+invalidNodeParameter",
+			fields{
+				ElementType: asn1.QualifiedParameterType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x04,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "qualified_parameter",
+			},
+			true,
+		},
+		{
+			"-invalidFunction",
+			fields{
+				ElementType: asn1.FunctionType,
+			},
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x80, 0x0C, 0x0C, 0x43,
+					},
+				),
+			},
+			nil,
+			&Element{
+				ElementType: "function",
+			},
+			true,
+		},
+		{
+			"-invalidValue",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder([]byte{0xa4}),
+			},
+			[]*asn1.Decoder{},
+			&Element{
+				ElementType: "node",
+			},
+			true,
+		},
+		{
+			"-empty",
+			fields{
+				ElementType: asn1.NodeType,
+			},
+			args{
+				asn1.NewDecoder(nil),
+			},
+			[]*asn1.Decoder{},
+			&Element{
+				ElementType: "node",
+			},
+			true,
+		},
+	}
+	//nolint:dupl
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{
+				ElementType: tt.fields.ElementType,
+			}
+			got, err := el.handleContentContext(tt.args.decoder)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.handleContentContext() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.wantElement, el); diff != "" {
+				t.Fatalf("Decoder.handleContentContext() = %s", diff)
+			}
+
+			if len(tt.wantDecoder) != len(got) {
+				t.Fatalf(
+					"Decoder.handleContentContext() = incorrect got %d and expected slice len %d",
+					len(got), len(tt.wantDecoder),
+				)
+			}
+
+			for i, g := range got {
+				if diff := cmp.Diff(tt.wantDecoder[i].Bytes(), g.Bytes()); diff != "" {
+					t.Fatalf("Decoder.handleContext() out decoders do not match at %d = %s", i, diff)
+				}
+			}
+		})
+	}
+}
+
+func TestElement_handlePath(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		decoder *asn1.Decoder
+	}
+
+	tests := []struct {
+		name         string
+		args         args
+		wantDecoders []*asn1.Decoder
+		wantPath     string
+		wantErr      bool
+	}{
+		{
+			"+integer",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x03, 0x02, 0x01, 0x01},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			"1",
+			false,
+		},
+		{
+			"+integerLeftover",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x03, 0x02, 0x01, 0x01, 0x01, 0x01, 0x02, 0x04, 0x03},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{0x01, 0x01, 0x02, 0x04, 0x03}),
+				asn1.NewDecoder([]byte{}),
+			},
+			"1",
+			false,
+		},
+		{
+			"+qualified",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x07, 0x0D, 0x05, 0x01, 0x01, 0x02, 0x04, 0x03},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			"1.1.2.4.3",
+			false,
+		},
+		{
+			"+qualifiedLeftover",
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0xA0, 0x07, 0x0D, 0x05, 0x01, 0x01, 0x02, 0x04, 0x03,
+						0x01, 0x01, 0x02, 0x04, 0x03,
+					},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{0x01, 0x01, 0x02, 0x04, 0x03}),
+				asn1.NewDecoder([]byte{}),
+			},
+			"1.1.2.4.3",
+			false,
+		},
+		{
+			"+qualifiedNoLenByte",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x80, 0x0D, 0x05, 0x01, 0x01, 0x02, 0x04, 0x03, 0x00, 0x00},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			"1.1.2.4.3",
+			false,
+		},
+		{
+			"+qualifiedNoLenByteLeftOver",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x80, 0x0D, 0x05, 0x01, 0x01, 0x02, 0x04, 0x03, 0x00, 0x00, 0x01, 0x02, 0x04, 0x03},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{0x01, 0x02, 0x04, 0x03}),
+			},
+			"1.1.2.4.3",
+			false,
+		},
+		{
+			"+intNoLenByte",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x80, 0x02, 0x01, 0x01, 0x00, 0x00},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{}),
+			},
+			"1",
+			false,
+		},
+		{
+			"+intNoLenByteLeftover",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x80, 0x02, 0x01, 0x01, 0x00, 0x00, 0x01},
+				),
+			},
+			[]*asn1.Decoder{
+				asn1.NewDecoder([]byte{}),
+				asn1.NewDecoder([]byte{0x01}),
+			},
+			"1",
+			false,
+		},
+		{
+			"-noEnd",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x80, 0x02, 0x01, 0x01, 0x00},
+				),
+			},
+			[]*asn1.Decoder{},
+			"1",
+			true,
+		},
+		{
+			"-notAtEnd",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x80, 0x02, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00},
+				),
+			},
+			[]*asn1.Decoder{},
+			"1",
+			true,
+		},
+		{
+			"-qualifiedInvalid",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x80, 0x0D},
+				),
+			},
+			[]*asn1.Decoder{},
+			"",
+			true,
+		},
+		{
+			"-intInvalid",
+			args{
+				asn1.NewDecoder(
+					[]byte{0xA0, 0x03, 0x02},
+				),
+			},
+			[]*asn1.Decoder{},
+			"",
+			true,
+		},
+		{
+			"-empty",
+			args{
+				asn1.NewDecoder(
+					[]byte{},
+				),
+			},
+			[]*asn1.Decoder{},
+			"",
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{}
+			got, err := el.handlePath(tt.args.decoder)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.handlePath() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.wantPath, el.Path); diff != "" {
+				t.Fatalf("Element.handlePath() Path = %s", diff)
+			}
+
+			if len(tt.wantDecoders) != len(got) {
+				t.Fatalf(
+					"Decoder.handlePath() = incorrect got %d and expected slice len %d",
+					len(got), len(tt.wantDecoders),
+				)
+			}
+
+			for i, g := range got {
+				if diff := cmp.Diff(tt.wantDecoders[i].Bytes(), g.Bytes()); diff != "" {
+					t.Fatalf("Decoder.handlePath() out decoders do not match at %d = %s", i, diff)
+				}
+			}
+		})
+	}
+}
+
+func Test_getPath(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		decoder *asn1.Decoder
+	}
+
+	tests := []struct {
+		name    string
+		args    args
+		want    string
+		wantErr bool
+	}{
+		{
+			"+valid",
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0x02, 0x01, 0x01,
+					},
+				),
+			},
+			"1",
+			false,
+		},
+		{
+			"+universal",
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0x0D, 0x03, 0x01, 0x02, 0x02,
+					},
+				),
+			},
+			"1.2.2",
+			false,
+		},
+		{
+			"-universalFail",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0D},
+				),
+			},
+			"",
+			true,
+		},
+		{
+			"-intFail",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02},
+				),
+			},
+			"",
+			true,
+		},
+		{
+			"-empty",
+			args{
+				asn1.NewDecoder(
+					[]byte{},
+				),
+			},
+			"",
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := getPath(tt.args.decoder)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("getPath() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Fatalf("getPath() = %s", diff)
+			}
+		})
+	}
+}
+
+func TestGetElement(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		d *asn1.Decoder
+	}
+
+	tests := []struct {
+		name        string
+		args        args
+		wantElement *Element
+		wantDecoder *asn1.Decoder
+		wantErr     bool
+	}{
+		{
+			"+node",
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0x63, 0x2E, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x27, 0x31,
+						0x25, 0xA0, 0x16, 0x0C, 0x14, 0x52, 0x33, 0x4C, 0x41, 0x59, 0x56, 0x69, 0x72, 0x74, 0x75, 0x61,
+						0x6C, 0x50, 0x61, 0x74, 0x63, 0x68, 0x42, 0x61, 0x79, 0xA1, 0x02, 0x0C, 0x00, 0xA4, 0x02, 0x0C,
+						0x00, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+					},
+				),
+			},
+			&Element{
+				Path:        "1",
+				ElementType: "node",
+				IsOnline:    true,
+				Identifier:  "R3LAYVirtualPatchBay",
+			},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+parameter",
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F,
+						0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01, 0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03,
+						0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			&Element{
+				Path:        "1",
+				ElementType: "parameter",
+				Identifier:  "On",
+				IsOnline:    true,
+				Access:      3,
+				ValueType:   4,
+				Value:       false,
+			},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+function",
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0x74, 0x4F, 0xA0, 0x05, 0x0D, 0x03, 0x01, 0x02, 0x03, 0xA1, 0x46, 0x31,
+						0x44, 0xA0, 0x0E, 0x0C, 0x0C, 0x43, 0x61, 0x6C, 0x6C, 0x46, 0x72, 0x6F, 0x6D, 0x4A, 0x53, 0x4F,
+						0x4E, 0xA2, 0x17, 0x30, 0x15, 0xA0, 0x13, 0x75, 0x11, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x0A,
+						0x0C, 0x08, 0x70, 0x61, 0x72, 0x73, 0x4A, 0x53, 0x4F, 0x4E, 0xA3, 0x19, 0x30, 0x17, 0xA0, 0x15,
+						0x75, 0x13, 0xA0, 0x03, 0x02, 0x01, 0x03, 0xA1, 0x0C, 0x0C, 0x0A, 0x72, 0x65, 0x73, 0x75, 0x6C,
+						0x74, 0x4A, 0x53, 0x4F, 0x4E,
+					},
+				),
+			},
+			&Element{
+				Path:        "1.2.3",
+				ElementType: "function",
+				Identifier:  "CallFromJSON",
+				IsOnline:    false,
+			},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+qualifiedParameter",
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0x69, 0x7F, 0xA0, 0x05, 0x0D, 0x03, 0x01, 0x02, 0x02, 0xA1, 0x76, 0x31, 0x74, 0xA0, 0x08,
+						0x0C, 0x06, 0x52, 0x65, 0x74, 0x75, 0x72, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x03, 0xA5, 0x03, 0x02,
+						0x01, 0x03, 0xA2, 0x5E, 0x0C, 0x5C, 0x5B, 0x7B, 0x22, 0x66, 0x6E, 0x22, 0x3A, 0x22, 0x63, 0x6F,
+						0x6E, 0x6E, 0x65, 0x63, 0x74, 0x74, 0x6F, 0x67, 0x75, 0x69, 0x22, 0x2C, 0x22, 0x66, 0x6E, 0x49,
+						0x44, 0x22, 0x3A, 0x22, 0x34, 0x35, 0x38, 0x30, 0x22, 0x2C, 0x22, 0x66, 0x6E, 0x52, 0x65, 0x74,
+						0x54, 0x79, 0x70, 0x65, 0x22, 0x3A, 0x22, 0x4A, 0x53, 0x4F, 0x4E, 0x22, 0x2C, 0x22, 0x66, 0x6E,
+						0x52, 0x65, 0x74, 0x56, 0x61, 0x6C, 0x75, 0x65, 0x22, 0x3A, 0x5B, 0x22, 0x73, 0x74, 0x61, 0x74,
+						0x65, 0x22, 0x3A, 0x22, 0x63, 0x6F, 0x6E, 0x6E, 0x65, 0x63, 0x74, 0x69, 0x6E, 0x67, 0x22, 0x5D,
+						0x7D, 0x5D,
+					},
+				),
+			},
+			&Element{
+				Path:        "1.2.2",
+				ElementType: "qualified_parameter",
+				Identifier:  "Return",
+				IsOnline:    false,
+				Value: string(
+					`[{"fn":"connecttogui","fnID":"4580","fnRetType":"JSON","fnRetValue":["state":"connecting"]}]`,
+				),
+				Access:    3,
+				ValueType: 3,
+			},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+qualifiedNode",
+			args{
+				asn1.NewDecoder(
+					[]byte{
+						0x6A, 0x80, 0xA0, 0x07, 0x0D, 0x05, 0x01, 0x01, 0x02, 0x04,
+						0x02, 0xA2, 0x80, 0x64, 0x80, 0xA0, 0x80, 0x61, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x01, 0xA1, 0x80,
+						0x31, 0x80, 0xA0, 0x04, 0x0C, 0x02, 0x4F, 0x6E, 0xAD, 0x03, 0x02, 0x01, 0x04, 0xA2, 0x03, 0x01,
+						0x01, 0x00, 0xA5, 0x03, 0x02, 0x01, 0x03, 0xA9, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+						0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x02, 0xA1, 0x80, 0x31,
+						0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x31, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+						0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01,
+						0x03, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x32, 0xA3,
+						0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80,
+						0xA0, 0x03, 0x02, 0x01, 0x04, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E,
+						0x64, 0x20, 0x33, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+						0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x05, 0xA1, 0x80, 0x31, 0x80, 0xA0, 0x08, 0x0C,
+						0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x34, 0xA3, 0x03, 0x01, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+						0x00, 0x00, 0x00, 0x00, 0xA0, 0x80, 0x63, 0x80, 0xA0, 0x03, 0x02, 0x01, 0x06, 0xA1, 0x80, 0x31,
+						0x80, 0xA0, 0x08, 0x0C, 0x06, 0x42, 0x61, 0x6E, 0x64, 0x20, 0x35, 0xA3, 0x03, 0x01, 0x01, 0xFF,
+						0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					},
+				),
+			},
+			&Element{
+				Path:        "1.1.2.4.2",
+				ElementType: "qualified_node",
+				Children: []*Element{
+					{
+						Path:        "1",
+						ElementType: "parameter",
+						Identifier:  "On",
+						IsOnline:    true,
+						Access:      3,
+						ValueType:   4,
+						Value:       false,
+					},
+					{
+						Path:        "2",
+						ElementType: "node",
+						Identifier:  "Band 1",
+						IsOnline:    true,
+					},
+					{
+						Path:        "3",
+						ElementType: "node",
+						Identifier:  "Band 2",
+						IsOnline:    true,
+					},
+					{
+						Path:        "4",
+						ElementType: "node",
+						Identifier:  "Band 3",
+						IsOnline:    true,
+					},
+					{
+						Path:        "5",
+						ElementType: "node",
+						Identifier:  "Band 4",
+						IsOnline:    true,
+					},
+					{
+						Path:        "6",
+						ElementType: "node",
+						Identifier:  "Band 5",
+						IsOnline:    true,
+					},
+				},
+			},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"-unknownType",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x60, 0x80, 0xA0, 0x07, 0x0D, 0x05, 0x01, 0x01, 0x02, 0x04},
+				),
+			},
+			nil,
+			asn1.NewDecoder(nil),
+			true,
+		},
+		{
+			"-incorrectApplicationByte",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x2a, 0x80, 0xA0, 0x07, 0x0D, 0x05, 0x01, 0x01, 0x02, 0x04},
+				),
+			},
+			nil,
+			asn1.NewDecoder(nil),
+			true,
+		},
+		{
+			"-missingApplication",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x6A, 0x80},
+				),
+			},
+			nil,
+			asn1.NewDecoder(nil),
+			true,
+		},
+		{
+			"-empty",
+			args{
+				asn1.NewDecoder(
+					[]byte{},
+				),
+			},
+			nil,
+			asn1.NewDecoder(nil),
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, got1, err := getElement(tt.args.d)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("getElement() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.wantElement, got); diff != "" {
+				t.Fatalf("getElement() got = %s", diff)
+			}
+
+			if diff := cmp.Diff(tt.wantDecoder.Bytes(), got1.Bytes()); diff != "" {
+				t.Fatalf("getElement() got1 = %s", diff)
+			}
+		})
+	}
+}
+func TestElement_handleFunctionContext(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		context *asn1.Decoder
+		tag     byte
+	}
+
+	tests := []struct {
+		name        string
+		args        args
+		wantElement *Element
+		wantDecoder *asn1.Decoder
+		wantErr     bool
+	}{
+		{
+			"+context0",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				0,
+			},
+			&Element{Identifier: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context1",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				1,
+			},
+			&Element{Description: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context2",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				2,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context3",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				3,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+leftByteRead",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x80, 0x04, 0x00, 0x00, 0x02, 0x01, 0x04},
+				),
+				3,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{0x02, 0x01, 0x04}),
+			false,
+		},
+		{
+			"+leftByteReadWithLenByte",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x01, 0x01, 0xFF, 0x00, 0x02, 0x01, 0x04},
+				),
+				3,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{0x00, 0x02, 0x01, 0x04}),
+			false,
+		},
+		{"-context0Err", args{asn1.NewDecoder([]byte{}), 0}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context1Err", args{asn1.NewDecoder([]byte{}), 1}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context2Err", args{asn1.NewDecoder([]byte{}), 2}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context3Err", args{asn1.NewDecoder([]byte{}), 3}, &Element{}, asn1.NewDecoder(nil), true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{}
+			got, err := el.handleFunctionContext(tt.args.context, tt.args.tag)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.handleFunctionContext() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(el, tt.wantElement); diff != "" {
+				t.Fatalf("el.handleFunctionContext() = %s", diff)
+			}
+
+			if diff := cmp.Diff(tt.wantDecoder.Bytes(), got.Bytes()); diff != "" {
+				t.Fatalf("handleFunctionContext() = %s", diff)
+			}
+		})
+	}
+}
+
+func TestElement_handleNodeContext(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		context *asn1.Decoder
+		tag     byte
+	}
+
+	tests := []struct {
+		name        string
+		args        args
+		wantElement *Element
+		wantDecoder *asn1.Decoder
+		wantErr     bool
+	}{
+		{
+			"+context0",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				0,
+			},
+			&Element{Identifier: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context1",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				1,
+			},
+			&Element{Description: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context2",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x01, 0x01, 0xff},
+				),
+				2,
+			},
+			&Element{IsRoot: true},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context3",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x01, 0x01, 0x00},
+				),
+				3,
+			},
+			&Element{IsOnline: false},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context4",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				4,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context5",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				5,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+leftByteRead",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x80, 0x04, 0x00, 0x00, 0x02, 0x01, 0x04},
+				),
+				5,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{0x02, 0x01, 0x04}),
+			false,
+		},
+		{
+			"+leftByteReadWithLenByte",
+			args{
+				asn1.NewDecoder(
+					[]byte{0x01, 0x01, 0xFF, 0x00, 0x02, 0x01, 0x04},
+				),
+				5,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{0x00, 0x02, 0x01, 0x04}),
+			false,
+		},
+		{"-context0Err", args{asn1.NewDecoder([]byte{}), 0}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context1Err", args{asn1.NewDecoder([]byte{}), 1}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context2Err", args{asn1.NewDecoder([]byte{}), 2}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context3Err", args{asn1.NewDecoder([]byte{}), 3}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context4Err", args{asn1.NewDecoder([]byte{}), 4}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context5Err", args{asn1.NewDecoder([]byte{}), 5}, &Element{}, asn1.NewDecoder(nil), true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{}
+			got, err := el.handleNodeContext(tt.args.context, tt.args.tag)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.handleNodeContext() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(el, tt.wantElement); diff != "" {
+				t.Fatalf("el.handleNodeContext() = %s", diff)
+			}
+
+			if diff := cmp.Diff(tt.wantDecoder.Bytes(), got.Bytes()); diff != "" {
+				t.Fatalf("handleNodeContext() = %s", diff)
+			}
+		})
+	}
+}
+
+func TestElement_handleParameterContext(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		context *asn1.Decoder
+		tag     byte
+	}
+
+	type fields struct {
+		valueType int
+	}
+
+	tests := []struct {
+		name        string
+		fields      fields
+		args        args
+		wantElement *Element
+		wantDecoder *asn1.Decoder
+		wantErr     bool
+	}{
+		{
+			"+context0",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				0,
+			},
+			&Element{Identifier: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context1",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				1,
+			},
+			&Element{Description: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context2",
+			fields{3},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				2,
+			},
+			&Element{Value: "On", ValueType: 3},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context3",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				3,
+			},
+			&Element{Minimum: int64(4)},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context4",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				4,
+			},
+			&Element{Maximum: int64(4)},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context5",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				5,
+			},
+			&Element{Access: 4},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context6",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				6,
+			},
+			&Element{Format: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context7",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				7,
+			},
+			&Element{Enumeration: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context8",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				8,
+			},
+			&Element{Factor: 4},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context9",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x01, 0x01, 0x00},
+				),
+				9,
+			},
+			&Element{IsOnline: false},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context10",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				10,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context11",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				11,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context12",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x0C, 0x02, 0x4F, 0x6E},
+				),
+				12,
+			},
+			&Element{Default: "On"},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context13",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				13,
+			},
+			&Element{Value: false, ValueType: 4},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context14",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				14,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context15",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				15,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context16",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				16,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context17",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				17,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context18",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				18,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+context18ReadOverUser",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x01, 0x04},
+				),
+				18,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+leftByteRead",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x02, 0x80, 0x04, 0x00, 0x00, 0x02, 0x01, 0x04},
+				),
+				18,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{0x02, 0x01, 0x04}),
+			false,
+		},
+		{
+			"+leftByteReadWithLenByte",
+			fields{},
+			args{
+				asn1.NewDecoder(
+					[]byte{0x01, 0x01, 0xFF, 0x00, 0x02, 0x01, 0x04},
+				),
+				18,
+			},
+			&Element{},
+			asn1.NewDecoder([]byte{0x00, 0x02, 0x01, 0x04}),
+			false,
+		},
+		{"-context0Err", fields{}, args{asn1.NewDecoder([]byte{}), 0}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context1Err", fields{}, args{asn1.NewDecoder([]byte{}), 1}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context2Err", fields{}, args{asn1.NewDecoder([]byte{}), 2}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context3Err", fields{}, args{asn1.NewDecoder([]byte{}), 3}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context4Err", fields{}, args{asn1.NewDecoder([]byte{}), 4}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context5Err", fields{}, args{asn1.NewDecoder([]byte{}), 5}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context6Err", fields{}, args{asn1.NewDecoder([]byte{}), 6}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context7Err", fields{}, args{asn1.NewDecoder([]byte{}), 7}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context8Err", fields{}, args{asn1.NewDecoder([]byte{}), 8}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context9Err", fields{}, args{asn1.NewDecoder([]byte{}), 9}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context10Err", fields{}, args{asn1.NewDecoder([]byte{}), 10}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context11Err", fields{}, args{asn1.NewDecoder([]byte{}), 11}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context10Err", fields{}, args{asn1.NewDecoder([]byte{}), 12}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context13Err", fields{}, args{asn1.NewDecoder([]byte{}), 13}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context14Err", fields{}, args{asn1.NewDecoder([]byte{}), 14}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context15Err", fields{}, args{asn1.NewDecoder([]byte{}), 15}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context16Err", fields{}, args{asn1.NewDecoder([]byte{}), 16}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context17Err", fields{}, args{asn1.NewDecoder([]byte{}), 17}, &Element{}, asn1.NewDecoder(nil), true},
+		{"-context18Err", fields{}, args{asn1.NewDecoder([]byte{}), 18}, &Element{}, asn1.NewDecoder(nil), true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{
+				ValueType: tt.fields.valueType,
+			}
+
+			got, err := el.handleParameterContext(tt.args.context, tt.args.tag)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.handleParameterContext() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(el, tt.wantElement); diff != "" {
+				t.Fatalf("el.handleParameterContext() = %s", diff)
+			}
+
+			if diff := cmp.Diff(tt.wantDecoder.Bytes(), got.Bytes()); diff != "" {
+				t.Fatalf("handleParameterContext() = %s", diff)
+			}
+		})
+	}
+}
+
+func TestElement_setValue(t *testing.T) {
+	t.Parallel()
+
+	type fields struct {
+		ValueType int
+	}
+
+	type args struct {
+		context *asn1.Decoder
+	}
+
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    any
+		want1   int
+		wantErr bool
+	}{
+		{
+			"+int",
+			fields{1},
+			args{asn1.NewDecoder([]byte{0x02, 0x01, 0x01})},
+			1,
+			0,
+			false,
+		},
+		{
+			"+real",
+			fields{2},
+			args{asn1.NewDecoder([]byte{0x02, 0x01, 0x01})},
+			int64(1),
+			3,
+			false,
+		},
+		{
+			"+string",
+			fields{3},
+			args{asn1.NewDecoder([]byte{0x0C, 0x04, 0x52, 0x75, 0x62, 0x79})},
+			"Ruby",
+			0,
+			false,
+		},
+		{
+			"+bool",
+			fields{4},
+			args{asn1.NewDecoder([]byte{0x01, 0x01, 0xff})},
+			true,
+			3,
+			false,
+		},
+		{
+			"+enum",
+			fields{6},
+			args{asn1.NewDecoder([]byte{0x02, 0x01, 0x01})},
+			1,
+			0,
+			false,
+		},
+		{
+			"-intDecodeErr",
+			fields{1},
+			args{asn1.NewDecoder([]byte{0x00})},
+			nil,
+			0,
+			true,
+		},
+		{
+			"-stringDecodeErr",
+			fields{3},
+			args{asn1.NewDecoder([]byte{0x04, 0x52, 0x75, 0x62, 0x79})},
+			nil,
+			0,
+			true,
+		},
+		{
+			"-boolDecodeErr",
+			fields{4},
+			args{asn1.NewDecoder([]byte{0x01, 0x01})},
+			nil,
+			0,
+			true,
+		},
+		{
+			"-anyDecodeErr",
+			fields{2},
+			args{asn1.NewDecoder([]byte{0x02})},
+			nil,
+			0,
+			true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{
+				ValueType: tt.fields.ValueType,
+			}
+			got, got1, err := el.setValue(tt.args.context)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Element.setValue() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Fatalf("Element.setValue() got = %s", diff)
+			}
+
+			if diff := cmp.Diff(tt.want1, got1); diff != "" {
+				t.Fatalf("Element.setValue() got1 = %s", diff)
+			}
+		})
+	}
+}
+
+func TestElement_setDefaultElementValue(t *testing.T) {
+	t.Parallel()
+
+	type fields struct {
+		ValueType int
+	}
+
+	tests := []struct {
+		name   string
+		fields fields
+		want   any
+	}{
+		{
+			"+string",
+			fields{
+				3,
+			},
+			"",
+		},
+		{
+			"+bool",
+			fields{
+				4,
+			},
+			false,
+		},
+		{
+			"+int",
+			fields{
+				1,
+			},
+			0,
+		},
+		{
+			"+real",
+			fields{
+				2,
+			},
+			0,
+		},
+		{
+			"-unknown",
+			fields{
+				5,
+			},
+			nil,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			el := &Element{
+				ValueType: tt.fields.ValueType,
+			}
+			el.setDefaultElementValue()
+
+			if diff := cmp.Diff(el.Value, tt.want); diff != "" {
+				t.Fatalf("el.setDefaultElementValue() = %s", diff)
+			}
+		})
+	}
+}
+
+func Test_findWithData(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		decoders []*asn1.Decoder
+	}
+
+	tests := []struct {
+		name    string
+		args    args
+		want    *asn1.Decoder
+		wantErr bool
+	}{
+		{
+			"+valid",
+			args{
+				[]*asn1.Decoder{
+					asn1.NewDecoder([]byte{0x01, 0x02, 0x03}),
+					asn1.NewDecoder([]byte{}),
+					asn1.NewDecoder([]byte{}),
+					asn1.NewDecoder([]byte{}),
+				},
+			},
+			asn1.NewDecoder([]byte{0x01, 0x02, 0x03}),
+			false,
+		},
+		{
+			"+empty",
+			args{
+				[]*asn1.Decoder{},
+			},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"-multipleDecodersWithData",
+			args{
+				[]*asn1.Decoder{
+					asn1.NewDecoder([]byte{0x01, 0x02, 0x03}),
+					asn1.NewDecoder([]byte{0x02, 0x03, 0x04}),
+					asn1.NewDecoder([]byte{}),
+					asn1.NewDecoder([]byte{}),
+				},
+			},
+			nil,
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := findWithData(tt.args.decoders)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("findWithData() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.want.Bytes(), got.Bytes()); diff != "" {
+				t.Fatalf("findWithData() = %s", diff)
+			}
+		})
+	}
+}
+
+func Test_handlePathFromUniversal(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		dec *asn1.Decoder
+	}
+
+	tests := []struct {
+		name    string
+		args    args
+		want    string
+		wantErr bool
+	}{
+		{
+			"+valid",
+			args{asn1.NewDecoder([]byte{0x0D, 0x02, 0x01, 0x01})},
+			"1.1",
+			false,
+		},
+		{
+			"-empty",
+			args{asn1.NewDecoder([]byte{})},
+			"",
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := handlePathFromUniversal(tt.args.dec)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("handlePathFromUniversal() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Fatalf("handlePathFromUniversal() = %s", diff)
+			}
+		})
+	}
+}
+
+func Test_readOverElement(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		decoder *asn1.Decoder
+	}
+
+	tests := []struct {
+		name    string
+		args    args
+		want    *asn1.Decoder
+		wantErr bool
+	}{
+		{
+			"+valid",
+			args{
+				asn1.NewDecoder([]byte{0xa1, 0x02, 0x0c, 0x00, 0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff}),
+			},
+			asn1.NewDecoder([]byte{0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff}),
+			false,
+		},
+		{
+			"+noLeft",
+			args{
+				asn1.NewDecoder([]byte{0xa3, 0x03, 0x01, 0x01, 0xff}),
+			},
+			asn1.NewDecoder([]byte{}),
+			false,
+		},
+		{
+			"+noLenByte",
+			args{
+				asn1.NewDecoder([]byte{
+					0xa1, 0x80, 0xa1, 0x02, 0x00, 0x00, 0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff,
+				}),
+			},
+			asn1.NewDecoder([]byte{0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff}),
+			false,
+		},
+		{
+			"+noLenByteEOF",
+			args{
+				asn1.NewDecoder([]byte{
+					0xa1, 0x80,
+				}),
+			},
+			asn1.NewDecoder(nil),
+			true,
+		},
+		{
+			"+noLenByteNoEndBytes",
+			args{
+				asn1.NewDecoder([]byte{
+					0xa1, 0x80, 0xa1, 0x02, 0x00, 0xa4, 0x02, 0x0c, 0x00, 0xa3, 0x03, 0x01, 0x01, 0xff,
+				}),
+			},
+			asn1.NewDecoder(nil),
+			true,
+		},
+		{
+			"-readError",
+			args{
+				asn1.NewDecoder([]byte{0xa1}),
+			},
+			asn1.NewDecoder(nil),
+			true,
+		},
+		{
+			"-empty",
+			args{
+				asn1.NewDecoder(nil),
+			},
+			asn1.NewDecoder(nil),
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := readOverElement(tt.args.decoder)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("readOverElement() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.want.Bytes(), got.Bytes()); diff != "" {
+				t.Fatalf("readOverElement() = %s", diff)
+			}
+		})
+	}
+}
+
+func Test_parsePath(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		path string
+	}
+
+	tests := []struct {
+		name    string
+		args    args
+		want    []int
+		wantErr bool
+	}{
+		{
+			"+valid",
+			args{
+				"1.2.3",
+			},
+			[]int{1, 2, 3},
+			false,
+		},
+		{
+			"+empty",
+			args{
+				"",
+			},
+			nil,
+			false,
+		},
+		{
+			"-nonIntPart",
+			args{
+				"1.abc.3",
+			},
+			nil,
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parsePath(tt.args.path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parsePath() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Fatalf("parsePath() = %s", diff)
+			}
+		})
+	}
+}
