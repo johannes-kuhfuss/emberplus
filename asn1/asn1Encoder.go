@@ -1,5 +1,6 @@
 /*
 ** Copyright (C) 2001-2024 Zabbix SIA
+** Adaptations (C) 2024 JKU
 **
 ** This program is free software: you can redistribute it and/or modify it under the terms of
 ** the GNU Affero General Public License as published by the Free Software Foundation, version 3.
@@ -16,6 +17,7 @@ package asn1
 
 import (
 	"encoding/asn1"
+	"fmt"
 )
 
 // GetData returns all data contained in the encoder.
@@ -43,7 +45,7 @@ func (c *Encoder) WriteRequest(path []int, tag string, cmd int) error {
 	case FunctionType:
 		c.openSequence(ApplicationByte(functionTag))
 	default:
-		return errs.Errorf("unknown application tag %s", tag)
+		return fmt.Errorf("unknown application tag %s", tag)
 	}
 
 	defer c.closeSequence()
@@ -61,7 +63,7 @@ func (c *Encoder) WriteRequest(path []int, tag string, cmd int) error {
 
 	err := c.WriteCommand(cmd)
 	if err != nil {
-		return errs.Wrap(err, "failed to writer dir command")
+		return fmt.Errorf("failed to writer dir command: %w", err)
 	}
 
 	return nil
@@ -87,7 +89,7 @@ func (c *Encoder) WriteRootTreeRequest() error {
 
 	err := c.WriteCommand(EmberGetDirCommand)
 	if err != nil {
-		return errs.Wrap(err, "failed to write command request")
+		return fmt.Errorf("failed to write command request: %w", err)
 	}
 
 	return nil
@@ -103,13 +105,13 @@ func (c *Encoder) WriteCommand(cmd int) error {
 
 	err := c.writeInt(cmd, 0)
 	if err != nil {
-		return errs.Wrap(err, "failed dir write int")
+		return fmt.Errorf("failed dir write int: %w", err)
 	}
 
 	if cmd == EmberGetDirCommand {
 		err = c.writeInt(dirFieldMaskAll, 1)
 		if err != nil {
-			return errs.Wrap(err, "failed to write dir field mask int")
+			return fmt.Errorf("failed to write dir field mask int: %w", err)
 		}
 	}
 
@@ -120,12 +122,12 @@ func (c *Encoder) WriteCommand(cmd int) error {
 func (c *Encoder) writeInt(i int, cont uint8) error {
 	err := c.data.WriteByte(ContextByte(cont))
 	if err != nil {
-		return errs.Wrap(err, "failed to write context byte")
+		return fmt.Errorf("failed to write context byte: %w", err)
 	}
 
 	b, err := asn1.Marshal(i)
 	if err != nil {
-		return errs.Wrap(err, "failed native go int asn1 marshal")
+		return fmt.Errorf("failed native go int asn1 marshal: %w", err)
 	}
 
 	c.data.WriteByte(uint8(len(b)))

@@ -1,5 +1,6 @@
 /*
 ** Copyright (C) 2001-2024 Zabbix SIA
+** Adaptations (C) 2024 JKU
 **
 ** This program is free software: you can redistribute it and/or modify it under the terms of
 ** the GNU Affero General Public License as published by the Free Software Foundation, version 3.
@@ -16,6 +17,7 @@ package asn1
 
 import (
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -27,24 +29,24 @@ import (
 func (c *Decoder) Read(tag uint8, compareByte func(num uint8) uint8) (*Decoder, bool, error) {
 	b, err := c.data.ReadByte()
 	if err != nil {
-		return nil, false, errs.Wrap(err, "failed to read tag byte")
+		return nil, false, fmt.Errorf("failed to read tag byte: %w", err)
 	}
 
 	if b != compareByte(tag) {
-		return nil, false, errs.Errorf("is not correct byte: %x got %x", compareByte(tag), b)
+		return nil, false, fmt.Errorf("is not correct byte: %x got %x", compareByte(tag), b)
 	}
 
 	lenB, _, err := c.readLength()
 	if err != nil {
 		if !errors.Is(err, ErrNoLenByte) {
-			return nil, false, errs.Wrap(err, "failed to read length byte")
+			return nil, false, fmt.Errorf("failed to read length byte: %w", err)
 		}
 
 		var out []byte
 
 		out, err = c.readWithOutLength()
 		if err != nil {
-			return nil, false, errs.Wrap(err, "failed to read with out provided length")
+			return nil, false, fmt.Errorf("failed to read with out provided length: %w", err)
 		}
 
 		return NewDecoder(out), true, nil
@@ -52,7 +54,7 @@ func (c *Decoder) Read(tag uint8, compareByte func(num uint8) uint8) (*Decoder, 
 
 	out, err := c.readWithLength(lenB)
 	if err != nil {
-		return nil, false, errs.Wrap(err, "failed to read with provided length")
+		return nil, false, fmt.Errorf("failed to read with provided length: %w", err)
 	}
 
 	return NewDecoder(out), false, nil
@@ -63,7 +65,7 @@ func (c *Decoder) Read(tag uint8, compareByte func(num uint8) uint8) (*Decoder, 
 func (c *Decoder) readLength() (int, int, error) {
 	lenB, err := c.data.ReadByte()
 	if err != nil {
-		return 0, 0, errs.Wrap(err, "incorrect length byte")
+		return 0, 0, fmt.Errorf("incorrect length byte: %w", err)
 	}
 
 	if lenB&contextByte != contextByte {
@@ -77,7 +79,7 @@ func (c *Decoder) readLength() (int, int, error) {
 	}
 
 	if lenB > maxLengthBytes {
-		return 0, 0, errs.New("length higher than 4")
+		return 0, 0, errors.New("length higher than 4")
 	}
 
 	var (
@@ -88,7 +90,7 @@ func (c *Decoder) readLength() (int, int, error) {
 	for i := 0; i < int(lenB); i++ {
 		val, err := c.data.ReadByte()
 		if err != nil {
-			return 0, 0, errs.Wrap(err, "incorrect additional length bytes")
+			return 0, 0, fmt.Errorf("incorrect additional length bytes: %w", err)
 		}
 
 		out = out<<8 + int(val)
@@ -106,7 +108,7 @@ func (c *Decoder) ReadEnd() (bool, error) {
 	}
 
 	if c.data.Len() < 2 {
-		return false, errs.New("not enough bytes")
+		return false, errors.New("not enough bytes")
 	}
 
 	b := c.data.Bytes()
@@ -117,7 +119,7 @@ func (c *Decoder) ReadEnd() (bool, error) {
 	for i := 0; i < closingOffset; i++ {
 		_, err := c.data.ReadByte()
 		if err != nil {
-			return false, errs.Wrapf(err, "failed to read end bytes")
+			return false, fmt.Errorf("failed to read end bytes: %w", err)
 		}
 	}
 
@@ -128,12 +130,12 @@ func (c *Decoder) ReadEnd() (bool, error) {
 func (c *Decoder) Peek() (byte, error) {
 	b, err := c.data.ReadByte()
 	if err != nil {
-		return 0, errs.Wrap(err, "failed to read a byte")
+		return 0, fmt.Errorf("failed to read a byte: %w", err)
 	}
 
 	err = c.data.UnreadByte()
 	if err != nil {
-		return 0, errs.Wrap(err, "failed to unread a byte")
+		return 0, fmt.Errorf("failed to unread a byte: %w", err)
 	}
 
 	return b, nil
@@ -144,16 +146,16 @@ func (c *Decoder) Peek() (byte, error) {
 func (c *Decoder) DecodeUniversal() ([]int, error) {
 	b, err := c.data.ReadByte()
 	if err != nil {
-		return nil, errs.Wrap(err, "failed to read tag byte")
+		return nil, fmt.Errorf("failed to read tag byte: %w", err)
 	}
 
 	if b != UniversalObjectTag {
-		return nil, errs.New("incorrect universal byte")
+		return nil, errors.New("incorrect universal byte")
 	}
 
 	lenB, _, err := c.readLength()
 	if err != nil {
-		return nil, errs.Wrap(err, "failed to read len byte")
+		return nil, fmt.Errorf("failed to read len byte: %w", err)
 	}
 
 	var out []int
@@ -161,7 +163,7 @@ func (c *Decoder) DecodeUniversal() ([]int, error) {
 	for i := 1; i <= lenB; i++ {
 		b, err := c.data.ReadByte()
 		if err != nil {
-			return nil, errs.Wrap(err, "failed to read bytes")
+			return nil, fmt.Errorf("failed to read bytes: %w", err)
 		}
 
 		out = append(out, int(b))
@@ -174,16 +176,16 @@ func (c *Decoder) DecodeUniversal() ([]int, error) {
 func (c *Decoder) DecodeUTF8() (string, error) {
 	b, err := c.data.ReadByte()
 	if err != nil {
-		return "", errs.Wrap(err, "failed to read tag byte")
+		return "", fmt.Errorf("failed to read tag byte: %w", err)
 	}
 
 	if b != UTF8StringTag {
-		return "", errs.New("incorrect utf8 string byte")
+		return "", errors.New("incorrect utf8 string byte")
 	}
 
 	lenB, _, err := c.readLength()
 	if err != nil {
-		return "", errs.Wrap(err, "failed to read len byte")
+		return "", fmt.Errorf("failed to read len byte: %w", err)
 	}
 
 	var out []byte
@@ -191,7 +193,7 @@ func (c *Decoder) DecodeUTF8() (string, error) {
 	for i := 1; i <= lenB; i++ {
 		b, err := c.data.ReadByte()
 		if err != nil {
-			return "", errs.Wrap(err, "failed to read bytes")
+			return "", fmt.Errorf("failed to read bytes: %w", err)
 		}
 
 		out = append(out, b)
@@ -204,16 +206,16 @@ func (c *Decoder) DecodeUTF8() (string, error) {
 func (c *Decoder) DecodeInteger() (int, error) {
 	t, err := c.data.ReadByte()
 	if err != nil {
-		return 0, errs.Wrap(err, "failed to read tag byte")
+		return 0, fmt.Errorf("failed to read tag byte: %w", err)
 	}
 
 	if t != emberIntTag {
-		return 0, errs.New("incorrect integer byte")
+		return 0, errors.New("incorrect integer byte: %w")
 	}
 
 	lenB, _, err := c.readLength()
 	if err != nil {
-		return 0, errs.Wrap(err, "failed to read len byte")
+		return 0, fmt.Errorf("failed to read len byte: %w", err)
 	}
 
 	var out int
@@ -221,7 +223,7 @@ func (c *Decoder) DecodeInteger() (int, error) {
 	for ; lenB > 0; lenB-- {
 		b, err := c.data.ReadByte()
 		if err != nil {
-			return 0, errs.Wrap(err, "failed to read extra len bytes")
+			return 0, fmt.Errorf("failed to read extra len bytes: %w", err)
 		}
 
 		out = (out << 8) | int(b)
@@ -234,7 +236,7 @@ func (c *Decoder) DecodeInteger() (int, error) {
 func (c *Decoder) ReadByte() (byte, error) {
 	b, err := c.data.ReadByte()
 	if err != nil {
-		return 0, errs.Wrap(err, "failed to read byte")
+		return 0, fmt.Errorf("failed to read byte: %w", err)
 	}
 
 	return b, nil
@@ -243,7 +245,7 @@ func (c *Decoder) ReadByte() (byte, error) {
 func (c *Decoder) readWithOutLength() ([]byte, error) {
 	out, err := io.ReadAll(c.data)
 	if err != nil {
-		return nil, errs.Wrap(err, "failed to read all data")
+		return nil, fmt.Errorf("failed to read all data: %w", err)
 	}
 
 	return out, nil
@@ -255,13 +257,11 @@ func (c *Decoder) readWithLength(length int) ([]byte, error) {
 
 	n, err := c.data.Read(out)
 	if err != nil {
-		return nil, errs.Wrap(err, "failed to read bytes with set length")
+		return nil, fmt.Errorf("failed to read bytes with set length: %w", err)
 	}
 
 	if n != length {
-		return nil, errs.Errorf(
-			"failed to read bytes with set length, length %d does not match actual read length %d", length, n,
-		)
+		return nil, fmt.Errorf("failed to read bytes with set length, length %d does not match actual read length %d", length, n)
 	}
 
 	return out, nil

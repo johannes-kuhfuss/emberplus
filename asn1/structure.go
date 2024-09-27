@@ -1,5 +1,6 @@
 /*
 ** Copyright (C) 2001-2024 Zabbix SIA
+** Adaptations (C) 2024 JKU
 **
 ** This program is free software: you can redistribute it and/or modify it under the terms of
 ** the GNU Affero General Public License as published by the Free Software Foundation, version 3.
@@ -17,6 +18,8 @@ package asn1
 import (
 	"bytes"
 	"encoding/asn1"
+	"errors"
+	"fmt"
 )
 
 const (
@@ -95,7 +98,7 @@ const (
 )
 
 // ErrNoLenByte  error when length of bytes can not be determined.
-var ErrNoLenByte = errs.New("can not determine length")
+var ErrNoLenByte = errors.New("can not determine length")
 
 // Decoder decoder for ASN1 glow data.
 type Decoder struct {
@@ -141,7 +144,7 @@ func DecodeAny(in []byte, val any) (int, error) {
 
 	r, err := asn1.Unmarshal(in, val)
 	if err != nil {
-		return 0, errs.Wrap(err, "failed to unmarshal go native asn1 value")
+		return 0, fmt.Errorf("failed to unmarshal go native asn1 value: %w", err)
 	}
 
 	return slen - len(r), nil
