@@ -105,6 +105,10 @@ type Element struct {
 	ValueType   int
 }
 
+func (el *Element) ToString() string {
+	return fmt.Sprintf("Path: %v, EType: %v, Id: %v, Desc: %v, IsOnline: %v, IsRoot: %v, Value: %v, ValueType: %v", el.Path, el.ElementType, el.Identifier, el.Description, el.IsOnline, el.IsRoot, el.Value, el.ValueType)
+}
+
 //nolint:gocyclo,cyclop
 func (el *Element) handleApplication(decoder *asn1.Decoder) (*asn1.Decoder, error) {
 	for {
