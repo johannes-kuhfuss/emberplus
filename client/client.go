@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/johannes-kuhfuss/emberplus/s101"
 	"github.com/johannes-kuhfuss/services_utils/logger"
 )
 
@@ -59,10 +60,68 @@ func (ec *EmberClient) Disconnect() error {
 	}
 }
 
-func (ec *EmberClient) sendBerData(data []byte) error {
+func (ec *EmberClient) Write(data []byte) (int, error) {
 	if !ec.IsConnected() {
-		return errors.New("not connected")
+		return 0, errors.New("not connected")
+	} else {
+		n, err := ec.conn.Write(data)
+		if err != nil {
+			return 0, fmt.Errorf("error writing bytes: %w", err)
+		}
+		return n, nil
 	}
-	_ = data
-	return nil
+}
+
+func (ec *EmberClient) Receive() ([]byte, error) {
+	var (
+		s101s          [][]byte
+		incompleteS101 []byte
+		out            []byte
+		multi          bool
+	)
+	if !ec.IsConnected() {
+		return nil, errors.New("not connected")
+	} else {
+		for {
+			response := make([]byte, 1290)
+			n, err := ec.conn.Read(response)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read from connection: %w", err)
+			}
+
+			if len(incompleteS101) > 0 {
+				response = append(incompleteS101, response[:n]...)
+			}
+
+			s101s, incompleteS101, err = s101.GetS101s(response)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get s101 data from read: %w", err)
+			}
+
+			if len(incompleteS101) > 0 {
+				continue
+			}
+
+			glow, lastPacketType, err := s101.Decode(s101s)
+			if err != nil {
+				logger.Debug(fmt.Sprintf("failed to decode response: %s", err.Error()))
+				continue
+			}
+			switch lastPacketType {
+			case s101.FirstMultiPacket, s101.BodyMultiPacket:
+				out = append(out, glow...)
+				multi = true
+				continue
+			case s101.LastMultiPacket:
+				out = append(out, glow...)
+				return out, nil
+			default:
+				if multi {
+					logger.Error(fmt.Sprintf("dropping message in the middle of a multi packet read %x", glow), err)
+					continue
+				}
+				return glow, nil
+			}
+		}
+	}
 }

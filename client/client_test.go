@@ -79,10 +79,3 @@ func Test_Disconnect_Connected_Returns_NoError(t *testing.T) {
 	assert.Nil(t, err)
 	c.Close()
 }
-
-func Test_sendBerData_NotConnected_Returns_Error(t *testing.T) {
-	ec, _ := NewEmberClient("127.0.0.1", 9000)
-	err := ec.sendBerData(nil)
-	assert.NotNil(t, err)
-	assert.EqualValues(t, "not connected", err.Error())
-}
