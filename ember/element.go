@@ -16,6 +16,7 @@
 package ember
 
 import (
+	oasn1 "encoding/asn1"
 	"errors"
 	"fmt"
 	"strconv"
@@ -654,6 +655,60 @@ func (el *Element) handleParameterContext(context *asn1.Decoder, tag byte) (*asn
 	return context, nil
 }
 
+// decodeUnknown checks the first byte to determine the ASN1 type. It then decodes this type specifically
+func decodeUnknown(in []byte) (any, int, error) {
+	if len(in) > 0 {
+		switch in[0] {
+		case 1: //boolean
+			var o bool
+			n, err := asn1.DecodeAny(in, &o)
+			if err != nil {
+				return nil, n, err
+			}
+			return o, n, nil
+		case 2: //integer
+			var o int64
+			n, err := asn1.DecodeAny(in, &o)
+			if err != nil {
+				return nil, n, err
+			}
+			return o, n, nil
+		case 3: // Bit String
+			var o oasn1.BitString
+			n, err := asn1.DecodeAny(in, &o)
+			if err != nil {
+				return nil, n, err
+			}
+			return o, n, nil
+		case 4: // Octet String
+			var o []byte
+			n, err := asn1.DecodeAny(in, &o)
+			if err != nil {
+				return nil, n, err
+			}
+			return o, n, nil
+		case 6: // Object Identifier
+			var o oasn1.ObjectIdentifier
+			n, err := asn1.DecodeAny(in, &o)
+			if err != nil {
+				return nil, n, err
+			}
+			return o, n, nil
+		case 12: // UTF8 String
+			var o string
+			n, err := asn1.DecodeAny(in, &o)
+			if err != nil {
+				return nil, n, err
+			}
+			return o, n, nil
+		default:
+			return nil, len(in), errors.New("unknown type")
+		}
+	} else {
+		return nil, len(in), errors.New("no input data")
+	}
+}
+
 // setValue set's element value based on value type, this function assumes that value type is already set for element
 // as it comes before value in data stream, but it will try to decode a default value type is none is set.
 func (el *Element) setValue(context *asn1.Decoder) (any, int, error) {
@@ -684,9 +739,15 @@ func (el *Element) setValue(context *asn1.Decoder) (any, int, error) {
 
 		out = b
 	default:
-		n, err = asn1.DecodeAny(context.Bytes(), &out)
+		/*
+			n, err = asn1.DecodeAny(context.Bytes(), &out)
+			if err != nil {
+				return nil, 0, fmt.Errorf("failed to decode value of type %d: %w", el.ValueType, err)
+			}
+		*/
+		out, n, err = decodeUnknown(context.Bytes())
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to decode value of type %d: %w", el.ValueType, err)
+			return nil, 0, fmt.Errorf("failed to decode unknonwn value: %w", err)
 		}
 	}
 

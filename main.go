@@ -38,7 +38,7 @@ func main() {
 		}
 		logger.Info(fmt.Sprintf("data: %v", string(data)))
 	*/
-	r2, err := ember.GetRequestByType("node", "0.2.0")
+	r2, err := ember.GetRequestByType("node", "0.2")
 	if err != nil {
 		logger.Error("error getting root request", err)
 	} else {
