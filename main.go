@@ -14,7 +14,7 @@ var ()
 func main() {
 	logger.Info("Starting...")
 
-	ec, _ := client.NewEmberClient("127.0.0.1", 8999)
+	ec, _ := client.NewEmberClient("192.168.200.55", 9000)
 	ec.Connect()
 	rr, err := ember.GetRootRequest()
 	if err != nil {
