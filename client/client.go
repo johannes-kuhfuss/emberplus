@@ -40,7 +40,6 @@ func (ec *EmberClient) Connect() error {
 		logger.Error(fmt.Sprintf("Cannot connect to %v", ec.raddr), err)
 		return err
 	}
-	logger.Info(fmt.Sprintf("Trying to connect to %v...", ec.raddr))
 	conn, err := net.Dial("tcp", ec.raddr)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Could not connect to %v", ec.raddr), err)
@@ -55,7 +54,6 @@ func (ec *EmberClient) Disconnect() error {
 	if !ec.IsConnected() {
 		return errors.New("not connected")
 	} else {
-		logger.Info(fmt.Sprintf("Disconnecting from %v...", ec.raddr))
 		ec.conn.Close()
 		logger.Info(fmt.Sprintf("Disconnected from %v.", ec.raddr))
 		return nil
