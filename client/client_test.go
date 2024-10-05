@@ -7,6 +7,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+/* Example of how to call client
+
+ec, _ := client.NewEmberClient("192.168.200.55", 9000)
+ec.Connect()
+defer ec.Disconnect()
+
+data, err := ec.GetRoot()
+if err != nil {
+	logger.Error("oops", err)
+} else {
+	logger.Info(fmt.Sprintf("Data returned: %v", string(data)))
+}
+*/
+
 func Test_NewEmberClient_WrongPort_Returns_Error(t *testing.T) {
 	ec, err := NewEmberClient("localhost", -1)
 	assert.Nil(t, ec)

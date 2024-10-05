@@ -6,6 +6,8 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/johannes-kuhfuss/emberplus/asn1"
+	"github.com/johannes-kuhfuss/emberplus/ember"
 	"github.com/johannes-kuhfuss/emberplus/s101"
 	"github.com/johannes-kuhfuss/services_utils/logger"
 )
@@ -53,7 +55,7 @@ func (ec *EmberClient) Disconnect() error {
 	if !ec.IsConnected() {
 		return errors.New("not connected")
 	} else {
-		logger.Info(fmt.Sprintf("Disconnecting from %v.", ec.raddr))
+		logger.Info(fmt.Sprintf("Disconnecting from %v...", ec.raddr))
 		ec.conn.Close()
 		logger.Info(fmt.Sprintf("Disconnected from %v.", ec.raddr))
 		return nil
@@ -123,5 +125,44 @@ func (ec *EmberClient) Receive() ([]byte, error) {
 				return glow, nil
 			}
 		}
+	}
+}
+
+func (ec *EmberClient) GetRoot() ([]byte, error) {
+	data, err := ec.GetByType("qualified_node", "")
+	if err != nil {
+		logger.Error("error getting root request.", err)
+		return nil, err
+	}
+	return data, nil
+}
+
+func (ec *EmberClient) GetByType(emberType ember.ElementType, emberPath string) ([]byte, error) {
+	if !ec.IsConnected() {
+		return nil, errors.New("not connected")
+	} else {
+		tr, err := ember.GetRequestByType(emberType, emberPath)
+		if err != nil {
+			logger.Error(fmt.Sprintf("error getting request. Type: %v, Path: %v", emberType, emberPath), err)
+			return nil, err
+		}
+		ec.Write(tr)
+		out, err := ec.Receive()
+		if err != nil {
+			logger.Error(fmt.Sprintf("error getting asnwer. Type: %v, Path: %v", emberType, emberPath), err)
+			return nil, err
+		}
+		el2 := ember.NewElementConnection()
+		err = el2.Populate(asn1.NewDecoder(out))
+		if err != nil {
+			logger.Error(fmt.Sprintf("error processing answer. Type: %v, Path: %v", emberType, emberPath), err)
+			return nil, err
+		}
+		data, err := el2.MarshalJSON()
+		if err != nil {
+			logger.Error(fmt.Sprintf("error marshalling answer to JSON. Type: %v, Path: %v", emberType, emberPath), err)
+			return nil, err
+		}
+		return data, nil
 	}
 }
