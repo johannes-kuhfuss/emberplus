@@ -42,7 +42,7 @@ func (ec *EmberClient) Connect() error {
 	}
 	conn, err := net.Dial("tcp", ec.raddr)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Could not connect to %v", ec.raddr), err)
+		logger.Error(fmt.Sprintf("Cannot not connect to %v", ec.raddr), err)
 		return err
 	}
 	ec.conn = conn
