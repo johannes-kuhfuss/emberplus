@@ -46,7 +46,7 @@ func (ec *EmberClient) Connect() error {
 		return err
 	}
 	ec.conn = conn
-	logger.Info(fmt.Sprintf("Connected to %v.", ec.raddr))
+	logger.Info(fmt.Sprintf("Connected to Ember producer %v.", ec.raddr))
 	return nil
 }
 
