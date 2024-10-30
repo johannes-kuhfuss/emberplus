@@ -147,7 +147,7 @@ func (ec *EmberClient) GetByType(emberType ember.ElementType, emberPath string) 
 		ec.Write(tr)
 		out, err := ec.Receive()
 		if err != nil {
-			logger.Error(fmt.Sprintf("error getting Ember asnwer. Type: %v, Path: %v", emberType, emberPath), err)
+			logger.Error(fmt.Sprintf("error getting Ember answer. Type: %v, Path: %v", emberType, emberPath), err)
 			return nil, err
 		}
 		el2 := ember.NewElementConnection()
