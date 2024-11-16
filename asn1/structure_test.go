@@ -62,7 +62,7 @@ func TestNewDecoder(t *testing.T) {
 	}
 }
 
-func TestDecoder_Bytes(t *testing.T) {
+func TestDecoderBytes(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -112,7 +112,7 @@ func TestDecoder_Bytes(t *testing.T) {
 	}
 }
 
-func TestDecoder_Len(t *testing.T) {
+func TestDecoderLen(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {

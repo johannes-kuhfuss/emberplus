@@ -21,7 +21,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestEncoder_GetData(t *testing.T) {
+func TestEncoderGetData(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -56,7 +56,7 @@ func TestEncoder_GetData(t *testing.T) {
 	}
 }
 
-func TestEncoder_WriteRequest(t *testing.T) {
+func TestEncoderWriteRequest(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -197,7 +197,7 @@ func TestEncoder_WriteRequest(t *testing.T) {
 	}
 }
 
-func TestEncoder_WriteUniversal(t *testing.T) {
+func TestEncoderWriteUniversal(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -263,7 +263,7 @@ func TestEncoder_WriteUniversal(t *testing.T) {
 	}
 }
 
-func TestEncoder_WriteRootTreeRequest(t *testing.T) {
+func TestEncoderWriteRootTreeRequest(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -315,7 +315,7 @@ func TestEncoder_WriteRootTreeRequest(t *testing.T) {
 	}
 }
 
-func TestEncoder_WriteGetDirCommand(t *testing.T) {
+func TestEncoderWriteGetDirCommand(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -374,7 +374,7 @@ func TestEncoder_WriteGetDirCommand(t *testing.T) {
 	}
 }
 
-func TestEncoder_writeInt(t *testing.T) {
+func TestEncoderWriteInt(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -434,7 +434,7 @@ func TestEncoder_writeInt(t *testing.T) {
 	}
 }
 
-func TestEncoder_openSequence(t *testing.T) {
+func TestEncoderOpenSequence(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -482,7 +482,7 @@ func TestEncoder_openSequence(t *testing.T) {
 	}
 }
 
-func TestEncoder_closeSequence(t *testing.T) {
+func TestEncoderCloseSequence(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {

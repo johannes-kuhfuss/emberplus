@@ -21,7 +21,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestDecoder_Read(t *testing.T) {
+func TestDecoderRead(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -296,7 +296,7 @@ func TestDecoder_Read(t *testing.T) {
 	}
 }
 
-func TestDecoder_readLength(t *testing.T) {
+func TestDecoderReadLength(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -384,7 +384,7 @@ func TestDecoder_readLength(t *testing.T) {
 	}
 }
 
-func TestDecoder_ReadEnd(t *testing.T) {
+func TestDecoderReadEnd(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -477,7 +477,7 @@ func TestDecoder_ReadEnd(t *testing.T) {
 	}
 }
 
-func TestDecoder_Peek(t *testing.T) {
+func TestDecoderPeek(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -532,7 +532,7 @@ func TestDecoder_Peek(t *testing.T) {
 	}
 }
 
-func TestDecoder_DecodeUniversal(t *testing.T) {
+func TestDecoderDecodeUniversal(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -611,7 +611,7 @@ func TestDecoder_DecodeUniversal(t *testing.T) {
 	}
 }
 
-func TestDecoder_DecodeUtf8(t *testing.T) {
+func TestDecoderDecodeUtf8(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -747,7 +747,7 @@ func TestDecoder_DecodeUtf8(t *testing.T) {
 	}
 }
 
-func TestDecoder_DecodeInteger(t *testing.T) {
+func TestDecoderDecodeInteger(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -830,7 +830,7 @@ func TestDecoder_DecodeInteger(t *testing.T) {
 	}
 }
 
-func TestDecoder_ReadByte(t *testing.T) {
+func TestDecoderReadByte(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -889,7 +889,7 @@ func TestDecoder_ReadByte(t *testing.T) {
 	}
 }
 
-func TestDecoder_readWithOutLength(t *testing.T) {
+func TestDecoderReadWithOutLength(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
@@ -942,7 +942,7 @@ func TestDecoder_readWithOutLength(t *testing.T) {
 	}
 }
 
-func TestDecoder_readWithLength(t *testing.T) {
+func TestDecoderReadWithLength(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {

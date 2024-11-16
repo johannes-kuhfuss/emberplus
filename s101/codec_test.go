@@ -335,7 +335,7 @@ func TestDecode(t *testing.T) {
 	}
 }
 
-func Test_getS101s(t *testing.T) {
+func TestGetS101s(t *testing.T) {
 	t.Parallel()
 
 	type args struct {
@@ -414,7 +414,7 @@ func Test_getS101s(t *testing.T) {
 	}
 }
 
-func Test_createS101(t *testing.T) {
+func TestCreateS101(t *testing.T) {
 	t.Parallel()
 
 	type args struct {
@@ -472,7 +472,7 @@ func Test_createS101(t *testing.T) {
 	}
 }
 
-func Test_escapeBytesAboveBOFNE(t *testing.T) {
+func TestEscapeBytesAboveBOFNE(t *testing.T) {
 	t.Parallel()
 
 	type args struct {
@@ -535,7 +535,7 @@ func Test_escapeBytesAboveBOFNE(t *testing.T) {
 	}
 }
 
-func Test_getCRC(t *testing.T) {
+func TestGetCRC(t *testing.T) {
 	t.Parallel()
 
 	type args struct {
@@ -623,7 +623,7 @@ func Test_getCRC(t *testing.T) {
 	}
 }
 
-func Test_parseCRC(t *testing.T) {
+func TestParseCRC(t *testing.T) {
 	t.Parallel()
 
 	type args struct {
@@ -665,7 +665,7 @@ func Test_parseCRC(t *testing.T) {
 	}
 }
 
-func Test_computeCRCByte(t *testing.T) {
+func TestComputeCRCByte(t *testing.T) {
 	t.Parallel()
 
 	type args struct {
