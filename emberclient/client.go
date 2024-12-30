@@ -53,11 +53,14 @@ func (ec *EmberClient) Connect() error {
 func (ec *EmberClient) Disconnect() error {
 	if !ec.IsConnected() {
 		return errors.New("not connected")
-	} else {
-		ec.conn.Close()
-		logger.Info(fmt.Sprintf("Disconnected Ember from %v.", ec.raddr))
-		return nil
 	}
+	err := ec.conn.Close()
+	if err != nil {
+		logger.Errorf("Error while disconnecting Ember from %v: %v", ec.raddr, err)
+		return err
+	}
+	logger.Info(fmt.Sprintf("Disconnected Ember from %v.", ec.raddr))
+	return nil
 }
 
 func (ec *EmberClient) Write(data []byte) (int, error) {
@@ -148,6 +151,7 @@ func (ec *EmberClient) GetByType(emberType ember.ElementType, emberPath string) 
 		out, err := ec.Receive()
 		if err != nil {
 			logger.Error(fmt.Sprintf("error getting Ember answer. Type: %v, Path: %v", emberType, emberPath), err)
+			ec.conn.Close()
 			return nil, err
 		}
 		el2 := ember.NewElementConnection()
