@@ -37,16 +37,16 @@ func (ec *EmberClient) IsConnected() bool {
 func (ec *EmberClient) Connect() error {
 	if ec.IsConnected() {
 		err := errors.New("already connected")
-		logger.Error(fmt.Sprintf("Cannot connect Ember to %v", ec.raddr), err)
+		logger.Errorf("Cannot connect Ember to %v, %v", ec.raddr, err)
 		return err
 	}
 	conn, err := net.Dial("tcp", ec.raddr)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Cannot not connect Ember to %v", ec.raddr), err)
+		logger.Errorf("Cannot not connect Ember to %v, %v", ec.raddr, err)
 		return err
 	}
 	ec.conn = conn
-	logger.Info(fmt.Sprintf("Connected to Ember producer %v.", ec.raddr))
+	logger.Infof("Connected to Ember producer %v.", ec.raddr)
 	return nil
 }
 
@@ -59,7 +59,7 @@ func (ec *EmberClient) Disconnect() error {
 		logger.Errorf("Error while disconnecting Ember from %v: %v", ec.raddr, err)
 		return err
 	}
-	logger.Info(fmt.Sprintf("Disconnected Ember from %v.", ec.raddr))
+	logger.Infof("Disconnected Ember from %v.", ec.raddr)
 	return nil
 }
 
@@ -107,7 +107,7 @@ func (ec *EmberClient) Receive() ([]byte, error) {
 
 			glow, lastPacketType, err := s101.Decode(s101s)
 			if err != nil {
-				logger.Debug(fmt.Sprintf("failed to decode response: %s", err.Error()))
+				logger.Debugf("failed to decode response: %s", err.Error())
 				continue
 			}
 			switch lastPacketType {
@@ -120,7 +120,7 @@ func (ec *EmberClient) Receive() ([]byte, error) {
 				return out, nil
 			default:
 				if multi {
-					logger.Error(fmt.Sprintf("dropping message in the middle of a multi packet read %x", glow), err)
+					logger.Errorf("dropping message in the middle of a multi packet read %x, %v", glow, err)
 					continue
 				}
 				return glow, nil
@@ -144,25 +144,28 @@ func (ec *EmberClient) GetByType(emberType ember.ElementType, emberPath string) 
 	} else {
 		tr, err := ember.GetRequestByType(emberType, emberPath)
 		if err != nil {
-			logger.Error(fmt.Sprintf("error getting Ember request. Type: %v, Path: %v", emberType, emberPath), err)
+			logger.Errorf("error getting Ember request. Type: %v, Path: %v, %v", emberType, emberPath, err)
 			return nil, err
 		}
 		ec.Write(tr)
 		out, err := ec.Receive()
 		if err != nil {
-			logger.Error(fmt.Sprintf("error getting Ember answer. Type: %v, Path: %v", emberType, emberPath), err)
-			ec.conn.Close()
+			logger.Errorf("error getting Ember answer. Type: %v, Path: %v, %v", emberType, emberPath, err)
+			cerr := ec.conn.Close()
+			if cerr != nil {
+				logger.Errorf("Error while disconnecting Ember from %v: %v", ec.raddr, cerr)
+			}
 			return nil, err
 		}
 		el2 := ember.NewElementConnection()
 		err = el2.Populate(asn1.NewDecoder(out))
 		if err != nil {
-			logger.Error(fmt.Sprintf("error processing Ember answer. Type: %v, Path: %v", emberType, emberPath), err)
+			logger.Errorf("error processing Ember answer. Type: %v, Path: %v, %v", emberType, emberPath, err)
 			return nil, err
 		}
 		data, err := el2.MarshalJSON()
 		if err != nil {
-			logger.Error(fmt.Sprintf("error marshalling Ember answer to JSON. Type: %v, Path: %v", emberType, emberPath), err)
+			logger.Errorf("error marshalling Ember answer to JSON. Type: %v, Path: %v, %v", emberType, emberPath, err)
 			return nil, err
 		}
 		return data, nil
