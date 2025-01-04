@@ -120,8 +120,10 @@ func (ec *EmberClient) Receive() ([]byte, error) {
 				return out, nil
 			default:
 				if multi {
-					logger.Errorf("dropping message in the middle of a multi packet read %x, %v", glow, err)
-					continue
+					err = errors.New("dropping message in the middle of a multi packet read")
+					logger.Error("package processing error", err)
+					//continue
+					return nil, err
 				}
 				return glow, nil
 			}
