@@ -55,6 +55,7 @@ func (ec *EmberClient) Disconnect() error {
 		return errors.New("not connected")
 	}
 	err := ec.conn.Close()
+	ec.conn = nil
 	if err != nil {
 		logger.Errorf("Error while disconnecting Ember from %v: %v", ec.raddr, err)
 		return err
