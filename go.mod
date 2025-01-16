@@ -6,7 +6,7 @@ toolchain go1.23.3
 
 require (
 	github.com/google/go-cmp v0.6.0
-	github.com/johannes-kuhfuss/services_utils v1.0.23
+	github.com/johannes-kuhfuss/services_utils v1.0.24
 	github.com/stretchr/testify v1.10.0
 )
 
