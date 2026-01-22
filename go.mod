@@ -1,10 +1,10 @@
 module github.com/johannes-kuhfuss/emberplus
 
-go 1.25.5
+go 1.25.6
 
 require (
 	github.com/google/go-cmp v0.7.0
-	github.com/johannes-kuhfuss/services_utils v1.0.33
+	github.com/johannes-kuhfuss/services_utils v1.0.34
 	github.com/stretchr/testify v1.11.1
 )
 
