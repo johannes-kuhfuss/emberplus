@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/google/go-cmp v0.7.0
-	github.com/johannes-kuhfuss/services_utils v1.0.34
+	github.com/johannes-kuhfuss/services_utils v1.0.35
 	github.com/stretchr/testify v1.11.1
 )
 
