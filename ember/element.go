@@ -411,7 +411,7 @@ func (el *Element) handleFunctionContext(context *asn1.Decoder, tag byte) (*asn1
 		}
 	}
 
-	for i := 0; i < n; i++ {
+	for range n {
 		_, err := context.ReadByte()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read over used bytes: %w", err)

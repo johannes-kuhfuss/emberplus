@@ -116,7 +116,7 @@ func (c *Decoder) ReadEnd() (bool, error) {
 		return false, nil
 	}
 
-	for i := 0; i < closingOffset; i++ {
+	for range closingOffset {
 		_, err := c.data.ReadByte()
 		if err != nil {
 			return false, fmt.Errorf("failed to read end bytes: %w", err)
