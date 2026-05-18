@@ -1,6 +1,6 @@
 module github.com/johannes-kuhfuss/emberplus
 
-go 1.26.3
+go 1.25
 
 require (
 	github.com/google/go-cmp v0.7.0
