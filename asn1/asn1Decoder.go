@@ -210,7 +210,7 @@ func (c *Decoder) DecodeInteger() (int, error) {
 	}
 
 	if t != emberIntTag {
-		return 0, errors.New("incorrect integer byte: %w")
+		return 0, fmt.Errorf("incorrect integer byte: %x", t)
 	}
 
 	lenB, _, err := c.readLength()

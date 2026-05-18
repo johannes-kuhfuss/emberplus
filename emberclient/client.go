@@ -1,20 +1,25 @@
 package emberclient
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/johannes-kuhfuss/emberplus/asn1"
 	"github.com/johannes-kuhfuss/emberplus/ember"
 	"github.com/johannes-kuhfuss/emberplus/s101"
-	"github.com/johannes-kuhfuss/services_utils/logger"
 )
 
+const defaultTimeout = 30 * time.Second
+
 type EmberClient struct {
-	raddr string
-	conn  net.Conn
+	raddr   string
+	conn    net.Conn
+	timeout time.Duration
 }
 
 func NewEmberClient(host string, port int) (*EmberClient, error) {
@@ -27,7 +32,14 @@ func NewEmberClient(host string, port int) (*EmberClient, error) {
 	}
 	portStr := strconv.Itoa(port)
 	ec.raddr = net.JoinHostPort(host, portStr)
+	ec.timeout = defaultTimeout
 	return &ec, nil
+}
+
+// SetTimeout configures the per-operation timeout for connect, read, and write calls.
+// A zero or negative duration disables the timeout.
+func (ec *EmberClient) SetTimeout(timeout time.Duration) {
+	ec.timeout = timeout
 }
 
 func (ec *EmberClient) IsConnected() bool {
@@ -35,18 +47,20 @@ func (ec *EmberClient) IsConnected() bool {
 }
 
 func (ec *EmberClient) Connect() error {
+	return ec.ConnectContext(context.Background())
+}
+
+func (ec *EmberClient) ConnectContext(ctx context.Context) error {
 	if ec.IsConnected() {
-		err := errors.New("already connected")
-		logger.Errorf("Cannot connect Ember to %v, %v", ec.raddr, err)
-		return err
+		return errors.New("already connected")
 	}
-	conn, err := net.Dial("tcp", ec.raddr)
+
+	dialer := net.Dialer{Timeout: ec.timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", ec.raddr)
 	if err != nil {
-		logger.Errorf("Cannot not connect Ember to %v, %v", ec.raddr, err)
-		return err
+		return fmt.Errorf("failed to connect to %s: %w", ec.raddr, err)
 	}
 	ec.conn = conn
-	logger.Infof("Connected to Ember producer %v.", ec.raddr)
 	return nil
 }
 
@@ -57,26 +71,36 @@ func (ec *EmberClient) Disconnect() error {
 	err := ec.conn.Close()
 	ec.conn = nil
 	if err != nil {
-		logger.Errorf("Error while disconnecting Ember from %v: %v", ec.raddr, err)
-		return err
+		return fmt.Errorf("failed to disconnect from %s: %w", ec.raddr, err)
 	}
-	logger.Infof("Disconnected Ember from %v.", ec.raddr)
 	return nil
 }
 
 func (ec *EmberClient) Write(data []byte) (int, error) {
 	if !ec.IsConnected() {
 		return 0, errors.New("not connected")
-	} else {
-		n, err := ec.conn.Write(data)
-		if err != nil {
-			return 0, fmt.Errorf("error writing bytes: %w", err)
-		}
-		return n, nil
 	}
+
+	if err := ec.setDeadline(time.Now()); err != nil {
+		return 0, err
+	}
+
+	n, err := ec.conn.Write(data)
+	if err != nil {
+		return n, fmt.Errorf("error writing bytes: %w", err)
+	}
+	if n != len(data) {
+		return n, io.ErrShortWrite
+	}
+
+	return n, nil
 }
 
 func (ec *EmberClient) Receive() ([]byte, error) {
+	return ec.ReceiveContext(context.Background())
+}
+
+func (ec *EmberClient) ReceiveContext(ctx context.Context) ([]byte, error) {
 	var (
 		s101s          [][]byte
 		incompleteS101 []byte
@@ -85,92 +109,133 @@ func (ec *EmberClient) Receive() ([]byte, error) {
 	)
 	if !ec.IsConnected() {
 		return nil, errors.New("not connected")
-	} else {
-		for {
-			response := make([]byte, 1290)
-			n, err := ec.conn.Read(response)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read from connection: %w", err)
-			}
+	}
 
-			if len(incompleteS101) > 0 {
-				response = append(incompleteS101, response[:n]...)
-			}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := ec.setDeadline(time.Now()); err != nil {
+			return nil, err
+		}
 
-			s101s, incompleteS101, err = s101.GetS101s(response)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get s101 data from read: %w", err)
-			}
+		response := make([]byte, 1290)
+		n, err := ec.conn.Read(response)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read from connection: %w", err)
+		}
 
-			if len(incompleteS101) > 0 {
-				continue
-			}
+		response = response[:n]
+		if len(incompleteS101) > 0 {
+			response = append(incompleteS101, response...)
+		}
 
-			glow, lastPacketType, err := s101.Decode(s101s)
-			if err != nil {
-				logger.Debugf("failed to decode response: %s", err.Error())
-				continue
+		s101s, incompleteS101, err = s101.GetS101s(response)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get s101 data from read: %w", err)
+		}
+
+		if len(incompleteS101) > 0 {
+			continue
+		}
+
+		glow, lastPacketType, err := s101.Decode(s101s)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		switch lastPacketType {
+		case s101.FirstMultiPacket, s101.BodyMultiPacket:
+			out = append(out, glow...)
+			multi = true
+			continue
+		case s101.LastMultiPacket:
+			out = append(out, glow...)
+			return out, nil
+		default:
+			if multi {
+				return nil, errors.New("dropping message in the middle of a multi packet read")
 			}
-			switch lastPacketType {
-			case s101.FirstMultiPacket, s101.BodyMultiPacket:
-				out = append(out, glow...)
-				multi = true
-				continue
-			case s101.LastMultiPacket:
-				out = append(out, glow...)
-				return out, nil
-			default:
-				if multi {
-					err = errors.New("dropping message in the middle of a multi packet read")
-					logger.Error("package processing error", err)
-					//continue
-					return nil, err
-				}
-				return glow, nil
-			}
+			return glow, nil
 		}
 	}
 }
 
 func (ec *EmberClient) GetRoot() ([]byte, error) {
-	data, err := ec.GetByType("qualified_node", "")
-	if err != nil {
-		logger.Error("error getting Ember root request.", err)
-		return nil, err
-	}
-	return data, nil
+	return ec.GetByType("qualified_node", "")
+}
+
+func (ec *EmberClient) GetRootCollection() (ember.ElementCollection, error) {
+	return ec.GetElementCollection("qualified_node", "")
 }
 
 func (ec *EmberClient) GetByType(emberType ember.ElementType, emberPath string) ([]byte, error) {
+	return ec.GetByTypeContext(context.Background(), emberType, emberPath)
+}
+
+func (ec *EmberClient) GetByTypeContext(ctx context.Context, emberType ember.ElementType, emberPath string) ([]byte, error) {
+	collection, err := ec.GetElementCollectionContext(ctx, emberType, emberPath)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := collection.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal Ember answer to JSON. Type: %v, Path: %v: %w", emberType, emberPath, err)
+	}
+
+	return data, nil
+}
+
+func (ec *EmberClient) GetElementCollection(emberType ember.ElementType, emberPath string) (ember.ElementCollection, error) {
+	return ec.GetElementCollectionContext(context.Background(), emberType, emberPath)
+}
+
+func (ec *EmberClient) GetElementCollectionContext(ctx context.Context, emberType ember.ElementType, emberPath string) (ember.ElementCollection, error) {
 	if !ec.IsConnected() {
 		return nil, errors.New("not connected")
-	} else {
-		tr, err := ember.GetRequestByType(emberType, emberPath)
-		if err != nil {
-			logger.Errorf("error getting Ember request. Type: %v, Path: %v, %v", emberType, emberPath, err)
-			return nil, err
-		}
-		ec.Write(tr)
-		out, err := ec.Receive()
-		if err != nil {
-			logger.Errorf("error getting Ember answer. Type: %v, Path: %v, %v", emberType, emberPath, err)
-			cerr := ec.conn.Close()
-			if cerr != nil {
-				logger.Errorf("Error while disconnecting Ember from %v: %v", ec.raddr, cerr)
-			}
-			return nil, err
-		}
-		el2 := ember.NewElementConnection()
-		err = el2.Populate(asn1.NewDecoder(out))
-		if err != nil {
-			logger.Errorf("error processing Ember answer. Type: %v, Path: %v, %v", emberType, emberPath, err)
-			return nil, err
-		}
-		data, err := el2.MarshalJSON()
-		if err != nil {
-			logger.Errorf("error marshalling Ember answer to JSON. Type: %v, Path: %v, %v", emberType, emberPath, err)
-			return nil, err
-		}
-		return data, nil
 	}
+
+	tr, err := ember.GetRequestByType(emberType, emberPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Ember request. Type: %v, Path: %v: %w", emberType, emberPath, err)
+	}
+	if _, err = ec.Write(tr); err != nil {
+		return nil, fmt.Errorf("failed to write Ember request. Type: %v, Path: %v: %w", emberType, emberPath, err)
+	}
+
+	out, err := ec.ReceiveContext(ctx)
+	if err != nil {
+		_ = ec.closeConn()
+		return nil, fmt.Errorf("failed to get Ember answer. Type: %v, Path: %v: %w", emberType, emberPath, err)
+	}
+
+	collection := ember.NewElementConnection()
+	if err = collection.Populate(asn1.NewDecoder(out)); err != nil {
+		return nil, fmt.Errorf("failed to process Ember answer. Type: %v, Path: %v: %w", emberType, emberPath, err)
+	}
+
+	return collection, nil
+}
+
+func (ec *EmberClient) setDeadline(now time.Time) error {
+	if ec.timeout <= 0 {
+		return nil
+	}
+
+	if err := ec.conn.SetDeadline(now.Add(ec.timeout)); err != nil {
+		return fmt.Errorf("failed to set connection deadline: %w", err)
+	}
+
+	return nil
+}
+
+func (ec *EmberClient) closeConn() error {
+	if ec.conn == nil {
+		return nil
+	}
+
+	err := ec.conn.Close()
+	ec.conn = nil
+
+	return err
 }

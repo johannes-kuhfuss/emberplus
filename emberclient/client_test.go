@@ -50,16 +50,20 @@ func TestNewEmberClientIPReturnsEmberClient(t *testing.T) {
 }
 
 func TestConnectCannotConnectReturnsError(t *testing.T) {
-	ec, _ := NewEmberClient("127.0.0.1", 9000)
-	err := ec.Connect()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NoError(t, err)
+	addr := listener.Addr().(*net.TCPAddr)
+	assert.NoError(t, listener.Close())
+
+	ec, _ := NewEmberClient("127.0.0.1", addr.Port)
+	err = ec.Connect()
 	assert.NotNil(t, err)
 	assert.EqualValues(t, false, ec.IsConnected())
-	assert.EqualValues(t, "dial tcp 127.0.0.1:9000: connectex: No connection could be made because the target machine actively refused it.", err.Error())
 }
 
 func TestConnectCanConnectReturnsNoError(t *testing.T) {
-	c, _ := net.Listen("tcp", "127.0.0.1:9000")
-	ec, _ := NewEmberClient("127.0.0.1", 9000)
+	c, _ := net.Listen("tcp", "127.0.0.1:0")
+	ec, _ := NewEmberClient("127.0.0.1", c.Addr().(*net.TCPAddr).Port)
 	err := ec.Connect()
 	assert.Nil(t, err)
 	assert.EqualValues(t, true, ec.IsConnected())
@@ -68,8 +72,8 @@ func TestConnectCanConnectReturnsNoError(t *testing.T) {
 }
 
 func TestConnectAlreadyConnectedReturnsError(t *testing.T) {
-	c, _ := net.Listen("tcp", "127.0.0.1:9000")
-	ec, _ := NewEmberClient("127.0.0.1", 9000)
+	c, _ := net.Listen("tcp", "127.0.0.1:0")
+	ec, _ := NewEmberClient("127.0.0.1", c.Addr().(*net.TCPAddr).Port)
 	ec.Connect()
 	err := ec.Connect()
 	assert.NotNil(t, err)
@@ -86,8 +90,8 @@ func TestDisconnectNoConnectionReturnsError(t *testing.T) {
 }
 
 func TestDisconnectConnectedReturnsNoError(t *testing.T) {
-	c, _ := net.Listen("tcp", "127.0.0.1:9000")
-	ec, _ := NewEmberClient("127.0.0.1", 9000)
+	c, _ := net.Listen("tcp", "127.0.0.1:0")
+	ec, _ := NewEmberClient("127.0.0.1", c.Addr().(*net.TCPAddr).Port)
 	ec.Connect()
 	err := ec.Disconnect()
 	assert.Nil(t, err)

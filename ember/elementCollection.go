@@ -112,11 +112,8 @@ func (ec ElementCollection) GetElementByPath(currentPath string) (*Element, erro
 			return el, nil
 		}
 
-		for _, ch := range el.Children {
-			childPath := fmt.Sprintf("%s.%s", key.Path, ch.Path)
-			if childPath == currentPath {
-				return ch, nil
-			}
+		if child, ok := findElementByPath(el.Children, key.Path, currentPath); ok {
+			return child, nil
 		}
 	}
 
@@ -130,14 +127,42 @@ func (ec ElementCollection) GetElementByID(id string) (*Element, string, error) 
 			return el, key.Path, nil
 		}
 
-		for _, ch := range el.Children {
-			if ch.Identifier == id {
-				return ch, fmt.Sprintf("%s.%s", key.Path, ch.Path), nil
-			}
+		if child, path, ok := findElementByID(el.Children, key.Path, id); ok {
+			return child, path, nil
 		}
 	}
 
 	return nil, "", ErrElementNotFound
+}
+
+func findElementByPath(children []*Element, parentPath, currentPath string) (*Element, bool) {
+	for _, child := range children {
+		childPath := fmt.Sprintf("%s.%s", parentPath, child.Path)
+		if childPath == currentPath {
+			return child, true
+		}
+
+		if found, ok := findElementByPath(child.Children, childPath, currentPath); ok {
+			return found, true
+		}
+	}
+
+	return nil, false
+}
+
+func findElementByID(children []*Element, parentPath, id string) (*Element, string, bool) {
+	for _, child := range children {
+		childPath := fmt.Sprintf("%s.%s", parentPath, child.Path)
+		if child.Identifier == id {
+			return child, childPath, true
+		}
+
+		if found, foundPath, ok := findElementByID(child.Children, childPath, id); ok {
+			return found, foundPath, true
+		}
+	}
+
+	return nil, "", false
 }
 
 // MarshalJSON returns the collection with path(string) in key value instead of a structure for json marshaling.

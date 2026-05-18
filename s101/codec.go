@@ -43,7 +43,7 @@ func GetS101s(message []byte) ([][]byte, []byte, error) {
 	return s101s, incompleteData, nil
 }
 
-// Decode removes all the S101 addons from the packet returning only glow data, currently does not check CRC.
+// Decode removes all the S101 addons from the packet returning only glow data.
 func Decode(s101s [][]byte) ([]byte, byte, error) {
 	var (
 		out            []byte
@@ -59,8 +59,11 @@ func Decode(s101s [][]byte) ([]byte, byte, error) {
 			lastPacketType = s101[5]
 		}
 
-		// remove checksum and end of frame byte, this check is done here as not to XOR a checksum byte
-		s101 = s101[:len(s101)-s101LenAfterGlow]
+		var err error
+		s101, err = verifyAndStripCRC(s101)
+		if err != nil {
+			return nil, 0, err
+		}
 
 		var (
 			ceFound bool
@@ -89,6 +92,31 @@ func Decode(s101s [][]byte) ([]byte, byte, error) {
 	}
 
 	return out, lastPacketType, nil
+}
+
+func verifyAndStripCRC(s101 []byte) ([]byte, error) {
+	if len(s101) < s101LenTilGlow+s101LenAfterGlow {
+		return nil, fmt.Errorf("malformed s101 packet, malformed s101 data: %x", s101)
+	}
+	if s101[0] != bof || s101[len(s101)-1] != eof {
+		return nil, fmt.Errorf("malformed s101 packet, missing frame boundary: %x", s101)
+	}
+
+	frameEnd := len(s101) - 1
+	for checksumLen := 2; checksumLen <= 4 && checksumLen < frameEnd; checksumLen++ {
+		payloadEnd := frameEnd - checksumLen
+		if payloadEnd <= 1 {
+			break
+		}
+
+		want := getCRC(s101[1:payloadEnd])
+		got := s101[payloadEnd:frameEnd]
+		if bytes.Equal(want, got) {
+			return s101[:payloadEnd], nil
+		}
+	}
+
+	return nil, fmt.Errorf("invalid s101 checksum: %x", s101)
 }
 
 // getS101s reads the last entry in the byte array start starts with BOF byte and ends with EOF byte.

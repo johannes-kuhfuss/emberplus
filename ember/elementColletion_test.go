@@ -887,6 +887,42 @@ func TestElementCollection_GetElementByPath(t *testing.T) {
 			false,
 		},
 		{
+			"+nestedChild",
+			ElementCollection{
+				ElementKey{
+					Path: "1",
+					ID:   "foo",
+				}: &Element{
+					Path:        "1",
+					ElementType: "node",
+					Identifier:  "foo",
+					Children: []*Element{
+						{
+							Path:        "2",
+							ElementType: "node",
+							Identifier:  "bar",
+							Children: []*Element{
+								{
+									Path:        "3",
+									ElementType: "parameter",
+									Identifier:  "baz",
+								},
+							},
+						},
+					},
+				},
+			},
+			args{
+				"1.2.3",
+			},
+			&Element{
+				Path:        "3",
+				ElementType: "parameter",
+				Identifier:  "baz",
+			},
+			false,
+		},
+		{
 			"-notFound",
 			ElementCollection{
 				ElementKey{
@@ -1037,6 +1073,43 @@ func TestElementCollection_GetElementByID(t *testing.T) {
 				Description: "foobar",
 			},
 			"1.2",
+			false,
+		},
+		{
+			"+nestedChild",
+			ElementCollection{
+				ElementKey{
+					Path: "1",
+					ID:   "foo",
+				}: &Element{
+					Path:        "1",
+					ElementType: "node",
+					Identifier:  "foo",
+					Children: []*Element{
+						{
+							Path:        "2",
+							ElementType: "node",
+							Identifier:  "bar",
+							Children: []*Element{
+								{
+									Path:        "3",
+									ElementType: "parameter",
+									Identifier:  "baz",
+								},
+							},
+						},
+					},
+				},
+			},
+			args{
+				"baz",
+			},
+			&Element{
+				Path:        "3",
+				ElementType: "parameter",
+				Identifier:  "baz",
+			},
+			"1.2.3",
 			false,
 		},
 		{
