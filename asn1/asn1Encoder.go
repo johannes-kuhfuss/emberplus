@@ -17,7 +17,9 @@ package asn1
 
 import (
 	"encoding/asn1"
+	"errors"
 	"fmt"
+	"math"
 )
 
 // GetData returns all data contained in the encoder.
@@ -53,7 +55,9 @@ func (c *Encoder) WriteRequest(path []int, tag string, cmd int) error {
 	c.openSequence(ContextByte(0))
 	defer c.closeSequence()
 
-	c.WriteUniversal(path)
+	if err := c.WriteUniversal(path); err != nil {
+		return fmt.Errorf("failed to write path: %w", err)
+	}
 
 	c.openSequence(ContextByte(2))
 	defer c.closeSequence()
@@ -70,13 +74,140 @@ func (c *Encoder) WriteRequest(path []int, tag string, cmd int) error {
 }
 
 // WriteUniversal writes the provided integer into the buffer as an glow encoded universal value.
-func (c *Encoder) WriteUniversal(path []int) {
-	c.data.WriteByte(UniversalObjectTag)
-	c.data.WriteByte(uint8(len(path)))
+func (c *Encoder) WriteUniversal(path []int) error {
+	value := make([]byte, 0, len(path))
+	for _, component := range path {
+		if component < 0 {
+			return fmt.Errorf("relative OID component must not be negative: %d", component)
+		}
 
-	for _, p := range path {
-		c.data.WriteByte(uint8(p))
+		value = append(value, encodeBase128(uint64(component))...)
 	}
+
+	c.data.WriteByte(UniversalObjectTag)
+	c.writeLength(len(value))
+	c.data.Write(value)
+
+	return nil
+}
+
+func encodeBase128(value uint64) []byte {
+	if value == 0 {
+		return []byte{0}
+	}
+
+	var scratch [10]byte
+	i := len(scratch)
+	for value > 0 {
+		i--
+		scratch[i] = byte(value & 0x7f)
+		if i < len(scratch)-1 {
+			scratch[i] |= 0x80
+		}
+		value >>= 7
+	}
+
+	return append([]byte(nil), scratch[i:]...)
+}
+
+func (c *Encoder) writeLength(length int) {
+	if length < 0x80 {
+		c.data.WriteByte(byte(length))
+		return
+	}
+
+	var scratch [8]byte
+	i := len(scratch)
+	for value := uint64(length); value > 0; value >>= 8 {
+		i--
+		scratch[i] = byte(value)
+	}
+
+	c.data.WriteByte(0x80 | byte(len(scratch)-i))
+	c.data.Write(scratch[i:])
+}
+
+// WriteReal writes a BER REAL using the binary, base-2 form required by EmBER.
+func (c *Encoder) WriteReal(value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return errors.New("EmBER REAL does not support NaN or infinity")
+	}
+	c.data.WriteByte(0x09)
+	if value == 0 {
+		c.data.WriteByte(0)
+		return nil
+	}
+
+	bits := math.Float64bits(value)
+	negative := bits>>63 != 0
+	exponentBits := int((bits >> 52) & 0x7ff)
+	mantissa := bits & ((uint64(1) << 52) - 1)
+	var exponent int64
+	if exponentBits == 0 {
+		exponent = -1074
+	} else {
+		mantissa |= uint64(1) << 52
+		exponent = int64(exponentBits) - 1023 - 52
+	}
+	for mantissa&1 == 0 {
+		mantissa >>= 1
+		exponent++
+	}
+
+	exponentBytes := encodeSignedInteger(exponent)
+	mantissaBytes := encodeUnsignedInteger(mantissa)
+	first := byte(0x80)
+	if negative {
+		first |= 0x40
+	}
+	switch len(exponentBytes) {
+	case 1:
+	case 2:
+		first |= 0x01
+	case 3:
+		first |= 0x02
+	default:
+		first |= 0x03
+	}
+
+	contentLength := 1 + len(exponentBytes) + len(mantissaBytes)
+	if len(exponentBytes) > 3 {
+		contentLength++
+	}
+	c.writeLength(contentLength)
+	c.data.WriteByte(first)
+	if len(exponentBytes) > 3 {
+		c.data.WriteByte(byte(len(exponentBytes)))
+	}
+	c.data.Write(exponentBytes)
+	c.data.Write(mantissaBytes)
+	return nil
+}
+
+func encodeSignedInteger(value int64) []byte {
+	var scratch [8]byte
+	for i := range scratch {
+		scratch[len(scratch)-1-i] = byte(value >> (8 * i))
+	}
+	i := 0
+	for i < len(scratch)-1 && ((scratch[i] == 0 && scratch[i+1]&0x80 == 0) || (scratch[i] == 0xff && scratch[i+1]&0x80 != 0)) {
+		i++
+	}
+	return append([]byte(nil), scratch[i:]...)
+}
+
+func encodeUnsignedInteger(value uint64) []byte {
+	var scratch [8]byte
+	i := len(scratch)
+	for value > 0 {
+		i--
+		scratch[i] = byte(value)
+		value >>= 8
+	}
+	if i == len(scratch) {
+		return []byte{0}
+	}
+	return append([]byte(nil), scratch[i:]...)
 }
 
 // WriteRootTreeRequest writes a request for root element collection into the buffer.
@@ -130,7 +261,7 @@ func (c *Encoder) writeInt(i int, cont uint8) error {
 		return fmt.Errorf("failed native go int asn1 marshal: %w", err)
 	}
 
-	c.data.WriteByte(uint8(len(b)))
+	c.writeLength(len(b))
 	c.data.Write(b)
 
 	return nil

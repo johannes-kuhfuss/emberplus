@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/johannes-kuhfuss/emberplus/asn1"
 	"github.com/johannes-kuhfuss/emberplus/s101"
@@ -33,10 +34,30 @@ type ElementKey struct {
 // ElementCollection contains one level of elements and their Ids as key.
 type ElementCollection map[ElementKey]*Element
 
-// Populate fills in collection with data from the decoder.
+// Populate fills the collection while preserving the legacy value and element representations.
+func (ec ElementCollection) Populate(data *asn1.Decoder) error {
+	return ec.populateLegacy(data)
+}
+
+// PopulateGlow250 fills the collection using the complete Glow 2.50 model.
+func (ec ElementCollection) PopulateGlow250(data *asn1.Decoder) error {
+	message, err := DecodeRoot(data.Bytes())
+	if err != nil {
+		return fmt.Errorf("failed to decode Glow root: %w", err)
+	}
+	if message.Elements == nil {
+		return errors.New("Glow root does not contain elements")
+	}
+	for key, element := range message.Elements {
+		ec[key] = element
+	}
+	return nil
+}
+
+// populateLegacy is retained for source compatibility with the original model.
 //
 //nolint:gocyclo,cyclop
-func (ec ElementCollection) Populate(data *asn1.Decoder) error {
+func (ec ElementCollection) populateLegacy(data *asn1.Decoder) error {
 	var end bool
 
 	app0Codec, _, err := data.Read(asn1.RootElementCollectionTag, asn1.ApplicationByte)
@@ -122,22 +143,47 @@ func (ec ElementCollection) GetElementByPath(currentPath string) (*Element, erro
 
 // GetElementByID returns element from collection with the provided identifier.
 func (ec ElementCollection) GetElementByID(id string) (*Element, string, error) {
-	for key, el := range ec {
-		if key.ID == id {
-			return el, key.Path, nil
-		}
-
-		if child, path, ok := findElementByID(el.Children, key.Path, id); ok {
-			return child, path, nil
-		}
+	matches := ec.GetElementsByID(id)
+	if len(matches) > 0 {
+		return matches[0].Element, matches[0].Path, nil
 	}
 
 	return nil, "", ErrElementNotFound
 }
 
+// ElementMatch is one scoped identifier lookup result.
+type ElementMatch struct {
+	Element *Element
+	Path    string
+}
+
+// GetElementsByID returns every element with id in deterministic path order.
+// Ember identifiers are only expected to be unique among siblings.
+func (ec ElementCollection) GetElementsByID(id string) []ElementMatch {
+	var matches []ElementMatch
+	for key, el := range ec {
+		if key.ID == id {
+			matches = append(matches, ElementMatch{Element: el, Path: key.Path})
+		}
+		collectElementsByID(&matches, el.Children, key.Path, id)
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
+	return matches
+}
+
+func collectElementsByID(matches *[]ElementMatch, children []*Element, parentPath, id string) {
+	for _, child := range children {
+		childPath := joinElementPath(parentPath, child.Path)
+		if child.Identifier == id {
+			*matches = append(*matches, ElementMatch{Element: child, Path: childPath})
+		}
+		collectElementsByID(matches, child.Children, childPath, id)
+	}
+}
+
 func findElementByPath(children []*Element, parentPath, currentPath string) (*Element, bool) {
 	for _, child := range children {
-		childPath := fmt.Sprintf("%s.%s", parentPath, child.Path)
+		childPath := joinElementPath(parentPath, child.Path)
 		if childPath == currentPath {
 			return child, true
 		}
@@ -152,7 +198,7 @@ func findElementByPath(children []*Element, parentPath, currentPath string) (*El
 
 func findElementByID(children []*Element, parentPath, id string) (*Element, string, bool) {
 	for _, child := range children {
-		childPath := fmt.Sprintf("%s.%s", parentPath, child.Path)
+		childPath := joinElementPath(parentPath, child.Path)
 		if child.Identifier == id {
 			return child, childPath, true
 		}
@@ -165,6 +211,16 @@ func findElementByID(children []*Element, parentPath, id string) (*Element, stri
 	return nil, "", false
 }
 
+func joinElementPath(parent, child string) string {
+	if parent == "" {
+		return child
+	}
+	if child == "" {
+		return parent
+	}
+	return parent + "." + child
+}
+
 // MarshalJSON returns the collection with path(string) in key value instead of a structure for json marshaling.
 func (ec ElementCollection) MarshalJSON() ([]byte, error) {
 	out := make(map[string]any)
@@ -173,39 +229,53 @@ func (ec ElementCollection) MarshalJSON() ([]byte, error) {
 		switch v.ElementType {
 		case asn1.NodeType, asn1.QualifiedNodeType:
 			out[k.Path] = node{
-				Path:        v.Path,
-				ElementType: v.ElementType,
-				Identifier:  v.Identifier,
-				Description: v.Description,
-				Children:    v.Children,
-				IsOnline:    v.IsOnline,
-				IsRoot:      v.IsRoot,
+				Path:              v.Path,
+				ElementType:       v.ElementType,
+				Identifier:        v.Identifier,
+				Description:       v.Description,
+				Children:          v.Children,
+				IsOnline:          v.IsOnline,
+				IsRoot:            v.IsRoot,
+				SchemaIdentifiers: v.SchemaIdentifiers,
+				TemplateReference: v.TemplateReference,
 			}
 		case asn1.ParameterType, asn1.QualifiedParameterType:
 			out[k.Path] = parameter{
-				Path:        v.Path,
-				ElementType: v.ElementType,
-				Children:    v.Children,
-				Identifier:  v.Identifier,
-				Description: v.Description,
-				Value:       v.Value,
-				Minimum:     v.Minimum,
-				Maximum:     v.Maximum,
-				Access:      v.Access,
-				Format:      v.Format,
-				Enumeration: v.Enumeration,
-				Factor:      v.Factor,
-				IsOnline:    v.IsOnline,
-				Default:     v.Default,
-				ValueType:   v.ValueType,
+				Path:              v.Path,
+				ElementType:       v.ElementType,
+				Children:          v.Children,
+				Identifier:        v.Identifier,
+				Description:       v.Description,
+				Value:             v.Value,
+				HasValue:          v.HasValue,
+				Minimum:           v.Minimum,
+				Maximum:           v.Maximum,
+				Access:            v.Access,
+				Format:            v.Format,
+				Enumeration:       v.Enumeration,
+				Factor:            v.Factor,
+				IsOnline:          v.IsOnline,
+				Default:           v.Default,
+				HasDefault:        v.HasDefault,
+				ValueType:         v.ValueType,
+				Formula:           v.Formula,
+				Step:              v.Step,
+				StreamIdentifier:  v.StreamIdentifier,
+				EnumMap:           v.EnumMap,
+				StreamDescriptor:  v.StreamDescriptor,
+				SchemaIdentifiers: v.SchemaIdentifiers,
+				TemplateReference: v.TemplateReference,
 			}
-		case asn1.FunctionType:
+		case asn1.FunctionType, QualifiedFunctionElement:
 			out[k.Path] = function{
 				Path:        v.Path,
 				ElementType: v.ElementType,
 				Identifier:  v.Identifier,
 				Description: v.Description,
+				Signature:   v.Function,
 			}
+		case MatrixElement, QualifiedMatrixElement, TemplateElement, QualifiedTemplateElement, CommandElement:
+			out[k.Path] = v
 		default:
 			return nil, errors.New("failed unknown element type")
 		}
@@ -219,36 +289,30 @@ func (ec ElementCollection) MarshalJSON() ([]byte, error) {
 	return bytes, nil
 }
 
-// NewElementConnection creates a empty element collection.
+// NewElementConnection creates an empty element collection.
 func NewElementConnection() ElementCollection {
+	return make(ElementCollection)
+}
+
+// NewElementCollection creates an empty element collection.
+func NewElementCollection() ElementCollection {
 	return make(ElementCollection)
 }
 
 // GetRootRequest returns a S101 request packet with an encoded request for root collection.
 func GetRootRequest() ([]byte, error) {
-	encoder := asn1.NewEncoder()
-
-	err := encoder.WriteRootTreeRequest()
+	glow, err := EncodeGetDirectory(QualifiedNodeElement, "", -1)
 	if err != nil {
-		return nil, fmt.Errorf("failed to write root command request: %w", err)
+		return nil, fmt.Errorf("failed to encode root command request: %w", err)
 	}
-
-	return s101.Encode(encoder.GetData(), s101.FirstMultiPacket), nil
+	return s101.Encode(glow, s101.SinglePacket), nil
 }
 
 // GetRequestByType returns S101 packet with an encoded request for element with the provided type and path.
 func GetRequestByType(et ElementType, path string) ([]byte, error) {
-	encoder := asn1.NewEncoder()
-
-	parsed, err := parsePath(path)
+	glow, err := EncodeGetDirectory(et, path, -1)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse path: %w", err)
+		return nil, fmt.Errorf("failed to encode request: %w", err)
 	}
-
-	err = encoder.WriteRequest(parsed, string(et), asn1.EmberGetDirCommand)
-	if err != nil {
-		return nil, fmt.Errorf("failed to write request: %w", err)
-	}
-
-	return s101.Encode(encoder.GetData(), s101.FirstMultiPacket), nil
+	return s101.Encode(glow, s101.SinglePacket), nil
 }

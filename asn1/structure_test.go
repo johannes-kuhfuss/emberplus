@@ -244,8 +244,6 @@ func TestDecodeAny(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
 			got, err := DecodeAny(tt.args.in, tt.args.val)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("DecodeAny() error = %v, wantErr %v", err, tt.wantErr)

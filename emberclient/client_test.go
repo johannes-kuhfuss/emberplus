@@ -300,6 +300,27 @@ func TestReceiveMultiPacketReturnsCombinedGlowData(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
+func TestReceiveAnswersKeepAliveBeforeEmberData(t *testing.T) {
+	t.Parallel()
+
+	keepAlive, err := s101.EncodeKeepAlive(s101.CommandKeepAliveRequest)
+	require.NoError(t, err)
+	want := []byte{1, 2, 3}
+	read := append(keepAlive, s101.Encode(want, s101.SinglePacket)...)
+	conn := &fakeConn{reads: [][]byte{read}}
+	ec := &EmberClient{conn: conn, timeout: time.Second}
+
+	got, err := ec.Receive()
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	decoder := s101.NewStreamDecoder()
+	frames, err := decoder.Push(conn.written.Bytes())
+	require.NoError(t, err)
+	require.Len(t, frames, 1)
+	assert.Equal(t, byte(s101.CommandKeepAliveResponse), frames[0].Command)
+}
+
 func TestReceiveWithoutConnectionReturnsError(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +342,20 @@ func TestReceiveContextCancelledReturnsError(t *testing.T) {
 
 	assert.Nil(t, got)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestReceiveContextInterruptsBlockedReadWithoutClientTimeout(t *testing.T) {
+	t.Parallel()
+
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ec := &EmberClient{conn: client, timeout: 0}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	got, err := ec.ReceiveContext(ctx)
+	assert.Nil(t, got)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestReceiveReadErrorReturnsError(t *testing.T) {

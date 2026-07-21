@@ -46,13 +46,15 @@ var ErrElementNotFound = errors.New("element not found")
 
 // node hold information about node and qualified node parameter fields.
 type node struct {
-	Path        string      `json:"path"`
-	ElementType ElementType `json:"element_type"`
-	Children    []*Element  `json:"children"`
-	Identifier  string      `json:"identifier"`
-	Description string      `json:"description"`
-	IsOnline    bool        `json:"is_online"`
-	IsRoot      bool        `json:"is_root"`
+	Path              string      `json:"path"`
+	ElementType       ElementType `json:"element_type"`
+	Children          []*Element  `json:"children"`
+	Identifier        string      `json:"identifier"`
+	Description       string      `json:"description"`
+	IsOnline          bool        `json:"is_online"`
+	IsRoot            bool        `json:"is_root"`
+	SchemaIdentifiers string      `json:"schema_identifiers,omitempty"`
+	TemplateReference string      `json:"template_reference,omitempty"`
 }
 
 // function hold information about function parameter fields.
@@ -62,25 +64,35 @@ type function struct {
 	Children    []*Element  `json:"children"`
 	Identifier  string      `json:"identifier"`
 	Description string      `json:"description"`
+	Signature   *Function   `json:"function,omitempty"`
 }
 
 // parameter hold information about parameter and qualified parameter fields.
 type parameter struct {
-	Path        string      `json:"path"`
-	ElementType ElementType `json:"element_type"`
-	Children    []*Element  `json:"children,omitempty"`
-	Identifier  string      `json:"identifier,omitempty"`
-	Description string      `json:"description,omitempty"`
-	Value       any         `json:"value,omitempty"`
-	Minimum     any         `json:"minimum,omitempty"`
-	Maximum     any         `json:"maximum,omitempty"`
-	Access      int         `json:"access,omitempty"`
-	Format      string      `json:"format,omitempty"`
-	Enumeration string      `json:"enumeration,omitempty"`
-	Factor      int         `json:"factor,omitempty"`
-	IsOnline    bool        `json:"is_online,omitempty"`
-	Default     any         `json:"default,omitempty"`
-	ValueType   int         `json:"type,omitempty"`
+	Path              string            `json:"path"`
+	ElementType       ElementType       `json:"element_type"`
+	Children          []*Element        `json:"children,omitempty"`
+	Identifier        string            `json:"identifier,omitempty"`
+	Description       string            `json:"description,omitempty"`
+	Value             any               `json:"value,omitempty"`
+	HasValue          bool              `json:"has_value,omitempty"`
+	Minimum           any               `json:"minimum,omitempty"`
+	Maximum           any               `json:"maximum,omitempty"`
+	Access            int               `json:"access,omitempty"`
+	Format            string            `json:"format,omitempty"`
+	Enumeration       string            `json:"enumeration,omitempty"`
+	Factor            int               `json:"factor,omitempty"`
+	IsOnline          bool              `json:"is_online,omitempty"`
+	Default           any               `json:"default,omitempty"`
+	HasDefault        bool              `json:"has_default,omitempty"`
+	ValueType         int               `json:"type,omitempty"`
+	Formula           string            `json:"formula,omitempty"`
+	Step              int64             `json:"step,omitempty"`
+	StreamIdentifier  int64             `json:"stream_identifier,omitempty"`
+	EnumMap           []EnumEntry       `json:"enum_map,omitempty"`
+	StreamDescriptor  *StreamDescriptor `json:"stream_descriptor,omitempty"`
+	SchemaIdentifiers string            `json:"schema_identifiers,omitempty"`
+	TemplateReference string            `json:"template_reference,omitempty"`
 }
 
 // ElementType wrapper for string to define available element types.
@@ -88,27 +100,44 @@ type ElementType string
 
 // Element contains all the values a glow element might contain.
 type Element struct {
-	Path        string
-	ElementType ElementType
-	Identifier  string
-	Description string
-	Children    []*Element
-	IsOnline    bool
-	IsRoot      bool
-	Maximum     any
-	Minimum     any
-	Value       any
-	Access      int
-	Format      string
-	Enumeration string
-	Factor      int
-	Default     any
-	ValueType   int
+	Path              string              `json:"path"`
+	ElementType       ElementType         `json:"element_type"`
+	Identifier        string              `json:"identifier,omitempty"`
+	Description       string              `json:"description,omitempty"`
+	Children          []*Element          `json:"children,omitempty"`
+	IsOnline          bool                `json:"is_online,omitempty"`
+	IsRoot            bool                `json:"is_root,omitempty"`
+	Maximum           any                 `json:"maximum,omitempty"`
+	Minimum           any                 `json:"minimum,omitempty"`
+	Value             any                 `json:"value,omitempty"`
+	HasValue          bool                `json:"has_value,omitempty"`
+	Access            int                 `json:"access,omitempty"`
+	Format            string              `json:"format,omitempty"`
+	Enumeration       string              `json:"enumeration,omitempty"`
+	Factor            int                 `json:"factor,omitempty"`
+	Default           any                 `json:"default,omitempty"`
+	HasDefault        bool                `json:"has_default,omitempty"`
+	ValueType         int                 `json:"type,omitempty"`
+	Formula           string              `json:"formula,omitempty"`
+	Step              int64               `json:"step,omitempty"`
+	StreamIdentifier  int64               `json:"stream_identifier,omitempty"`
+	EnumMap           []EnumEntry         `json:"enum_map,omitempty"`
+	StreamDescriptor  *StreamDescriptor   `json:"stream_descriptor,omitempty"`
+	SchemaIdentifiers string              `json:"schema_identifiers,omitempty"`
+	TemplateReference string              `json:"template_reference,omitempty"`
+	Matrix            *Matrix             `json:"matrix,omitempty"`
+	Function          *Function           `json:"function,omitempty"`
+	Template          *Template           `json:"template,omitempty"`
+	Command           *Command            `json:"command,omitempty"`
+	Unknown           map[uint64]asn1.TLV `json:"-"`
 }
 
 func (el *Element) ToString() string {
 	return fmt.Sprintf("Path: %v, EType: %v, Id: %v, Desc: %v, IsOnline: %v, IsRoot: %v, Value: %v, ValueType: %v", el.Path, el.ElementType, el.Identifier, el.Description, el.IsOnline, el.IsRoot, el.Value, el.ValueType)
 }
+
+// String implements fmt.Stringer.
+func (el *Element) String() string { return el.ToString() }
 
 //nolint:gocyclo,cyclop
 func (el *Element) handleApplication(decoder *asn1.Decoder) (*asn1.Decoder, error) {
@@ -848,9 +877,15 @@ func parsePath(path string) ([]int, error) {
 	out := make([]int, 0, len(paths))
 
 	for _, p := range paths {
+		if p == "" {
+			return nil, fmt.Errorf("path contains an empty component")
+		}
 		i, err := strconv.Atoi(p)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse path component")
+			return nil, fmt.Errorf("failed to parse path component %q: %w", p, err)
+		}
+		if i < 0 {
+			return nil, fmt.Errorf("path component must not be negative: %d", i)
 		}
 
 		out = append(out, i)

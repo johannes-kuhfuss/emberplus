@@ -24,6 +24,13 @@ const (
 	// SinglePacket is byte to identify a single packet message in S101.
 	SinglePacket = 0xC0
 
+	// CommandEmber identifies a frame containing a Glow payload.
+	CommandEmber = 0x00
+	// CommandKeepAliveRequest asks the peer to confirm that the connection is alive.
+	CommandKeepAliveRequest = 0x01
+	// CommandKeepAliveResponse answers CommandKeepAliveRequest.
+	CommandKeepAliveResponse = 0x02
+
 	// BOF S101 packet opening byte.
 	bof = 0xfe
 	// Slot S101 packet Slot byte.
@@ -31,7 +38,7 @@ const (
 	// messageType S101 byte defines our required message type.
 	messageType = 0x0e
 	// commandType defines that our S101 message is a command.
-	commandType = 0x00
+	commandType = CommandEmber
 	// version defines version plugin uses for S101.
 	version = 1
 	// dtdType defines that plugin uses glow for S101 packet payload.
@@ -39,7 +46,7 @@ const (
 	// appBytes defines how many application (version) byte will be used before payload.
 	appBytes = 2
 	// minorVersion Glow protocol minor version.
-	minorVersion = 40
+	minorVersion = 50
 	// majorVersion Glow protocol major version.
 	majorVersion = 2
 	// eof is S101 packet end byte.

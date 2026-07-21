@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 )
 
 // Read reads the next glow data block of the appropriate type, it checks the glow tag against the provided compare
@@ -158,15 +160,33 @@ func (c *Decoder) DecodeUniversal() ([]int, error) {
 		return nil, fmt.Errorf("failed to read len byte: %w", err)
 	}
 
-	var out []int
+	var (
+		out       []int
+		component uint64
+		inValue   bool
+	)
 
-	for i := 1; i <= lenB; i++ {
+	for i := 0; i < lenB; i++ {
 		b, err := c.data.ReadByte()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read bytes: %w", err)
 		}
-
-		out = append(out, int(b))
+		if component > (math.MaxUint64 >> 7) {
+			return nil, errors.New("relative OID component overflows uint64")
+		}
+		component = component<<7 | uint64(b&0x7f)
+		inValue = true
+		if b&0x80 == 0 {
+			if strconv.IntSize == 32 && component > math.MaxInt32 || component > uint64(math.MaxInt64) {
+				return nil, errors.New("relative OID component overflows int")
+			}
+			out = append(out, int(component))
+			component = 0
+			inValue = false
+		}
+	}
+	if inValue {
+		return nil, errors.New("truncated relative OID component")
 	}
 
 	return out, nil
@@ -204,6 +224,18 @@ func (c *Decoder) DecodeUTF8() (string, error) {
 
 // DecodeInteger decodes the following integer.
 func (c *Decoder) DecodeInteger() (int, error) {
+	value, err := c.DecodeInt64()
+	if err != nil {
+		return 0, err
+	}
+	if strconv.IntSize == 32 && (value < math.MinInt32 || value > math.MaxInt32) {
+		return 0, errors.New("integer overflows int")
+	}
+	return int(value), nil
+}
+
+// DecodeInt64 decodes a signed BER INTEGER.
+func (c *Decoder) DecodeInt64() (int64, error) {
 	t, err := c.data.ReadByte()
 	if err != nil {
 		return 0, fmt.Errorf("failed to read tag byte: %w", err)
@@ -218,17 +250,113 @@ func (c *Decoder) DecodeInteger() (int, error) {
 		return 0, fmt.Errorf("failed to read len byte: %w", err)
 	}
 
-	var out int
+	if lenB == 0 {
+		return 0, errors.New("BER integer must contain at least one byte")
+	}
+	if lenB > 8 {
+		return 0, errors.New("integer overflows int64")
+	}
 
-	for ; lenB > 0; lenB-- {
+	first, err := c.data.ReadByte()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read integer byte: %w", err)
+	}
+	var out int64
+	if first&0x80 != 0 {
+		out = -1
+	}
+	out = out<<8 | int64(first)
+
+	for lenB--; lenB > 0; lenB-- {
 		b, err := c.data.ReadByte()
 		if err != nil {
 			return 0, fmt.Errorf("failed to read extra len bytes: %w", err)
 		}
 
-		out = (out << 8) | int(b)
+		out = out<<8 | int64(b)
 	}
 
+	return out, nil
+}
+
+// DecodeReal decodes the binary BER REAL subset required by EmBER.
+func (c *Decoder) DecodeReal() (float64, error) {
+	t, err := c.data.ReadByte()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read REAL tag: %w", err)
+	}
+	if t != 0x09 {
+		return 0, fmt.Errorf("incorrect REAL byte: %x", t)
+	}
+	length, _, err := c.readLength()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read REAL length: %w", err)
+	}
+	if length == 0 {
+		return 0, nil
+	}
+	content, err := c.readWithLength(length)
+	if err != nil {
+		return 0, err
+	}
+	first := content[0]
+	if first&0x80 == 0 {
+		return 0, errors.New("decimal BER REAL encoding is not supported by EmBER")
+	}
+	if first&0x30 != 0 {
+		return 0, errors.New("EmBER REAL must use base 2")
+	}
+
+	exponentLength := int(first&0x03) + 1
+	index := 1
+	if exponentLength == 4 {
+		if index >= len(content) {
+			return 0, errors.New("missing REAL exponent length")
+		}
+		exponentLength = int(content[index])
+		index++
+	}
+	if exponentLength < 1 || exponentLength > 8 || index+exponentLength >= len(content) {
+		return 0, errors.New("invalid REAL exponent")
+	}
+	exponent, err := decodeSignedBytes(content[index : index+exponentLength])
+	if err != nil {
+		return 0, err
+	}
+	index += exponentLength
+	var mantissa uint64
+	if len(content)-index > 8 {
+		return 0, errors.New("REAL mantissa overflows uint64")
+	}
+	for _, b := range content[index:] {
+		mantissa = mantissa<<8 | uint64(b)
+	}
+	if mantissa == 0 {
+		return 0, errors.New("REAL mantissa must not be zero")
+	}
+
+	exponent += int64((first >> 2) & 0x03)
+	if exponent < math.MinInt32 || exponent > math.MaxInt32 {
+		return 0, errors.New("REAL exponent is out of range")
+	}
+	value := math.Ldexp(float64(mantissa), int(exponent))
+	if first&0x40 != 0 {
+		value = -value
+	}
+	return value, nil
+}
+
+func decodeSignedBytes(value []byte) (int64, error) {
+	if len(value) == 0 || len(value) > 8 {
+		return 0, errors.New("invalid signed integer length")
+	}
+	var out int64
+	if value[0]&0x80 != 0 {
+		out = -1
+	}
+	for _, b := range value {
+		out = out<<8 | int64(b)
+	}
 	return out, nil
 }
 
