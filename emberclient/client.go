@@ -17,6 +17,9 @@ import (
 
 const defaultTimeout = 30 * time.Second
 
+// ErrReceiveActive indicates that another operation currently owns the connection reader.
+var ErrReceiveActive = errors.New("connection receive loop is already active")
+
 type EmberClient struct {
 	raddr        string
 	conn         net.Conn
@@ -24,6 +27,9 @@ type EmberClient struct {
 	decoder      *s101.StreamDecoder
 	frames       []s101.Frame
 	pendingRoots []ember.RootMessage
+	stateMu      sync.Mutex
+	readerMu     sync.Mutex
+	writeMu      sync.Mutex
 	requestMu    sync.Mutex
 }
 
@@ -42,12 +48,17 @@ func NewEmberClient(host string, port int) (*EmberClient, error) {
 }
 
 // SetTimeout configures the per-operation timeout for connect, read, and write calls.
+// Serve reads until its context is cancelled and does not use this timeout.
 // A zero or negative duration disables the timeout.
 func (ec *EmberClient) SetTimeout(timeout time.Duration) {
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
 	ec.timeout = timeout
 }
 
 func (ec *EmberClient) IsConnected() bool {
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
 	return ec.conn != nil
 }
 
@@ -56,7 +67,13 @@ func (ec *EmberClient) Connect() error {
 }
 
 func (ec *EmberClient) ConnectContext(ctx context.Context) error {
-	if ec.IsConnected() {
+	if !ec.readerMu.TryLock() {
+		return ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
+	if ec.conn != nil {
 		return errors.New("already connected")
 	}
 
@@ -73,14 +90,19 @@ func (ec *EmberClient) ConnectContext(ctx context.Context) error {
 }
 
 func (ec *EmberClient) Disconnect() error {
-	if !ec.IsConnected() {
+	ec.stateMu.Lock()
+	if ec.conn == nil {
+		ec.stateMu.Unlock()
 		return errors.New("not connected")
 	}
-	err := ec.conn.Close()
+	conn := ec.conn
 	ec.conn = nil
 	ec.decoder = nil
 	ec.frames = nil
 	ec.pendingRoots = nil
+	ec.stateMu.Unlock()
+
+	err := conn.Close()
 	if err != nil {
 		return fmt.Errorf("failed to disconnect from %s: %w", ec.raddr, err)
 	}
@@ -93,27 +115,34 @@ func (ec *EmberClient) Write(data []byte) (int, error) {
 
 // WriteContext writes all data while honoring both the client timeout and context cancellation.
 func (ec *EmberClient) WriteContext(ctx context.Context, data []byte) (int, error) {
-	if !ec.IsConnected() {
+	conn, timeout := ec.connection()
+	if conn == nil {
 		return 0, errors.New("not connected")
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 
-	if err := ec.setWriteDeadline(ctx); err != nil {
+	ec.writeMu.Lock()
+	defer ec.writeMu.Unlock()
+
+	if err := setWriteDeadline(conn, timeout, ctx); err != nil {
+		_ = ec.closeConnIf(conn)
 		return 0, err
 	}
-	stop := ec.interruptOnCancel(ctx, false)
+	stop := interruptOnCancel(conn, ctx, false)
 	defer stop()
 
-	n, err := ec.conn.Write(data)
+	n, err := conn.Write(data)
 	if err != nil {
 		if ctxErr := contextError(ctx); ctxErr != nil {
 			return n, ctxErr
 		}
+		_ = ec.closeConnIf(conn)
 		return n, fmt.Errorf("error writing bytes: %w", err)
 	}
 	if n != len(data) {
+		_ = ec.closeConnIf(conn)
 		return n, io.ErrShortWrite
 	}
 
@@ -125,6 +154,14 @@ func (ec *EmberClient) Receive() ([]byte, error) {
 }
 
 func (ec *EmberClient) ReceiveContext(ctx context.Context) ([]byte, error) {
+	if !ec.readerMu.TryLock() {
+		return nil, ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
+	return ec.receiveContext(ctx, true)
+}
+
+func (ec *EmberClient) receiveContext(ctx context.Context, useClientTimeout bool) ([]byte, error) {
 	var (
 		out   []byte
 		multi bool
@@ -137,7 +174,7 @@ func (ec *EmberClient) ReceiveContext(ctx context.Context) ([]byte, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		frame, err := ec.nextFrame(ctx)
+		frame, err := ec.nextFrame(ctx, useClientTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -173,34 +210,51 @@ func (ec *EmberClient) ReceiveContext(ctx context.Context) ([]byte, error) {
 	}
 }
 
-func (ec *EmberClient) nextFrame(ctx context.Context) (s101.Frame, error) {
+func (ec *EmberClient) nextFrame(ctx context.Context, useClientTimeout bool) (s101.Frame, error) {
 	for {
+		ec.stateMu.Lock()
 		if len(ec.frames) > 0 {
 			frame := ec.frames[0]
 			ec.frames = ec.frames[1:]
+			ec.stateMu.Unlock()
 			return frame, nil
 		}
 		if ec.decoder == nil {
 			ec.decoder = s101.NewStreamDecoder()
 		}
-		if err := ec.setReadDeadline(ctx); err != nil {
+		decoder := ec.decoder
+		conn := ec.conn
+		timeout := ec.timeout
+		ec.stateMu.Unlock()
+		if conn == nil {
+			return s101.Frame{}, errors.New("not connected")
+		}
+		if !useClientTimeout {
+			timeout = 0
+		}
+		if err := setReadDeadline(conn, timeout, ctx); err != nil {
+			_ = ec.closeConnIf(conn)
 			return s101.Frame{}, err
 		}
-		stop := ec.interruptOnCancel(ctx, true)
+		stop := interruptOnCancel(conn, ctx, true)
 		response := make([]byte, 4096)
-		n, err := ec.conn.Read(response)
+		n, err := conn.Read(response)
 		stop()
 		if err != nil {
 			if ctxErr := contextError(ctx); ctxErr != nil {
 				return s101.Frame{}, ctxErr
 			}
+			_ = ec.closeConnIf(conn)
 			return s101.Frame{}, fmt.Errorf("failed to read from connection: %w", err)
 		}
-		frames, err := ec.decoder.Push(response[:n])
+		frames, err := decoder.Push(response[:n])
 		if err != nil {
+			_ = ec.closeConnIf(conn)
 			return s101.Frame{}, fmt.Errorf("failed to decode S101 stream: %w", err)
 		}
+		ec.stateMu.Lock()
 		ec.frames = append(ec.frames, frames...)
+		ec.stateMu.Unlock()
 	}
 }
 
@@ -235,8 +289,30 @@ func (ec *EmberClient) GetElementCollection(emberType ember.ElementType, emberPa
 }
 
 func (ec *EmberClient) GetElementCollectionContext(ctx context.Context, emberType ember.ElementType, emberPath string) (ember.ElementCollection, error) {
+	return ec.getElementCollectionContext(ctx, emberType, emberPath, false)
+}
+
+// GetElementCollectionGlow250 returns the complete Glow 2.50 value representation.
+func (ec *EmberClient) GetElementCollectionGlow250(emberType ember.ElementType, emberPath string) (ember.ElementCollection, error) {
+	return ec.GetElementCollectionGlow250Context(context.Background(), emberType, emberPath)
+}
+
+// GetElementCollectionGlow250Context returns the complete Glow 2.50 value representation.
+func (ec *EmberClient) GetElementCollectionGlow250Context(
+	ctx context.Context, emberType ember.ElementType, emberPath string,
+) (ember.ElementCollection, error) {
+	return ec.getElementCollectionContext(ctx, emberType, emberPath, true)
+}
+
+func (ec *EmberClient) getElementCollectionContext(
+	ctx context.Context, emberType ember.ElementType, emberPath string, glow250 bool,
+) (ember.ElementCollection, error) {
 	ec.requestMu.Lock()
 	defer ec.requestMu.Unlock()
+	if !ec.readerMu.TryLock() {
+		return nil, ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
 
 	if !ec.IsConnected() {
 		return nil, errors.New("not connected")
@@ -246,19 +322,23 @@ func (ec *EmberClient) GetElementCollectionContext(ctx context.Context, emberTyp
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Ember request. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
-	tr := s101.Encode(glow, s101.SinglePacket)
+	tr := s101.Encode(glow, s101.FirstMultiPacket)
 	if _, err = ec.WriteContext(ctx, tr); err != nil {
 		return nil, fmt.Errorf("failed to write Ember request. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
 
-	out, err := ec.ReceiveContext(ctx)
+	out, err := ec.receiveContext(ctx, true)
 	if err != nil {
-		_ = ec.closeConn()
 		return nil, fmt.Errorf("failed to get Ember answer. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
 
 	collection := ember.NewElementCollection()
-	if err = collection.PopulateGlow250(asn1.NewDecoder(out)); err != nil {
+	if glow250 {
+		err = collection.PopulateGlow250(asn1.NewDecoder(out))
+	} else {
+		err = collection.Populate(asn1.NewDecoder(out))
+	}
+	if err != nil {
 		return nil, fmt.Errorf("failed to process Ember answer. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
 
@@ -267,12 +347,14 @@ func (ec *EmberClient) GetElementCollectionContext(ctx context.Context, emberTyp
 
 // ReceiveRootContext reads the next complete Glow root message, including unsolicited notifications and streams.
 func (ec *EmberClient) ReceiveRootContext(ctx context.Context) (ember.RootMessage, error) {
-	if len(ec.pendingRoots) > 0 {
-		message := ec.pendingRoots[0]
-		ec.pendingRoots = ec.pendingRoots[1:]
+	if !ec.readerMu.TryLock() {
+		return ember.RootMessage{}, ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
+	if message, ok := ec.popPendingRoot(); ok {
 		return message, nil
 	}
-	return ec.receiveRootDirect(ctx)
+	return ec.receiveRootDirect(ctx, true)
 }
 
 // ReceiveRoot reads the next complete Glow root message.
@@ -280,8 +362,8 @@ func (ec *EmberClient) ReceiveRoot() (ember.RootMessage, error) {
 	return ec.ReceiveRootContext(context.Background())
 }
 
-func (ec *EmberClient) receiveRootDirect(ctx context.Context) (ember.RootMessage, error) {
-	data, err := ec.ReceiveContext(ctx)
+func (ec *EmberClient) receiveRootDirect(ctx context.Context, useClientTimeout bool) (ember.RootMessage, error) {
+	data, err := ec.receiveContext(ctx, useClientTimeout)
 	if err != nil {
 		return ember.RootMessage{}, err
 	}
@@ -318,18 +400,22 @@ func (ec *EmberClient) Invoke(ctx context.Context, path string, id int64, argume
 	}
 	ec.requestMu.Lock()
 	defer ec.requestMu.Unlock()
+	if !ec.readerMu.TryLock() {
+		return nil, ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
 	if _, err := ec.WriteContext(ctx, s101.Encode(glow, s101.SinglePacket)); err != nil {
 		return nil, err
 	}
 	for {
-		message, err := ec.receiveRootDirect(ctx)
+		message, err := ec.receiveRootDirect(ctx, true)
 		if err != nil {
 			return nil, err
 		}
 		if message.InvocationResult != nil && (id == 0 || message.InvocationResult.ID == id) {
 			return message.InvocationResult, nil
 		}
-		ec.pendingRoots = append(ec.pendingRoots, message)
+		ec.pushPendingRoot(message)
 	}
 }
 
@@ -341,6 +427,10 @@ func (ec *EmberClient) Subscribe(ctx context.Context, elementType ember.ElementT
 	}
 	ec.requestMu.Lock()
 	defer ec.requestMu.Unlock()
+	if !ec.readerMu.TryLock() {
+		return ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
 	_, err = ec.WriteContext(ctx, s101.Encode(glow, s101.SinglePacket))
 	return err
 }
@@ -349,6 +439,10 @@ func (ec *EmberClient) Subscribe(ctx context.Context, elementType ember.ElementT
 func (ec *EmberClient) KeepAlive(ctx context.Context) error {
 	ec.requestMu.Lock()
 	defer ec.requestMu.Unlock()
+	if !ec.readerMu.TryLock() {
+		return ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
 	request, err := s101.EncodeKeepAlive(s101.CommandKeepAliveRequest)
 	if err != nil {
 		return err
@@ -357,9 +451,13 @@ func (ec *EmberClient) KeepAlive(ctx context.Context) error {
 		return err
 	}
 	var deferred []s101.Frame
-	defer func() { ec.frames = append(deferred, ec.frames...) }()
+	defer func() {
+		ec.stateMu.Lock()
+		ec.frames = append(deferred, ec.frames...)
+		ec.stateMu.Unlock()
+	}()
 	for {
-		frame, err := ec.nextFrame(ctx)
+		frame, err := ec.nextFrame(ctx, true)
 		if err != nil {
 			return err
 		}
@@ -387,8 +485,20 @@ func (ec *EmberClient) Serve(ctx context.Context, handler func(ember.RootMessage
 	if handler == nil {
 		return errors.New("nil Glow message handler")
 	}
+	if !ec.readerMu.TryLock() {
+		return ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
 	for {
-		message, err := ec.ReceiveRootContext(ctx)
+		var (
+			message ember.RootMessage
+			err     error
+		)
+		if pending, ok := ec.popPendingRoot(); ok {
+			message = pending
+		} else {
+			message, err = ec.receiveRootDirect(ctx, false)
+		}
 		if err != nil {
 			return err
 		}
@@ -401,6 +511,10 @@ func (ec *EmberClient) Serve(ctx context.Context, handler func(ember.RootMessage
 func (ec *EmberClient) exchange(ctx context.Context, glow []byte) (ember.RootMessage, error) {
 	ec.requestMu.Lock()
 	defer ec.requestMu.Unlock()
+	if !ec.readerMu.TryLock() {
+		return ember.RootMessage{}, ErrReceiveActive
+	}
+	defer ec.readerMu.Unlock()
 	if !ec.IsConnected() {
 		return ember.RootMessage{}, errors.New("not connected")
 	}
@@ -409,52 +523,41 @@ func (ec *EmberClient) exchange(ctx context.Context, glow []byte) (ember.RootMes
 	}
 	// A queued root is an earlier unsolicited message. The response to this
 	// request must come from the wire so notification delivery stays ordered.
-	return ec.receiveRootDirect(ctx)
+	return ec.receiveRootDirect(ctx, true)
 }
 
-func (ec *EmberClient) setDeadline(now time.Time) error {
-	if ec.timeout <= 0 {
+func setReadDeadline(conn net.Conn, timeout time.Duration, ctx context.Context) error {
+	deadline, ok := operationDeadline(timeout, ctx)
+	if !ok {
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			return fmt.Errorf("failed to clear connection read deadline: %w", err)
+		}
 		return nil
 	}
-
-	if err := ec.conn.SetDeadline(now.Add(ec.timeout)); err != nil {
-		return fmt.Errorf("failed to set connection deadline: %w", err)
-	}
-
-	return nil
-}
-
-func (ec *EmberClient) setReadDeadline(ctx context.Context) error {
-	deadline, ok := ec.operationDeadline(ctx)
-	if !ok {
-		return ec.conn.SetReadDeadline(time.Time{})
-	}
-	if err := ec.conn.SetReadDeadline(deadline); err != nil {
+	if err := conn.SetReadDeadline(deadline); err != nil {
 		return fmt.Errorf("failed to set connection read deadline: %w", err)
 	}
 	return nil
 }
 
-func (ec *EmberClient) setWriteDeadline(ctx context.Context) error {
-	if ec.timeout > 0 {
-		if err := ec.setDeadline(time.Now()); err != nil {
-			return err
-		}
-	}
-	deadline, ok := ec.operationDeadline(ctx)
+func setWriteDeadline(conn net.Conn, timeout time.Duration, ctx context.Context) error {
+	deadline, ok := operationDeadline(timeout, ctx)
 	if !ok {
-		return ec.conn.SetWriteDeadline(time.Time{})
+		if err := conn.SetWriteDeadline(time.Time{}); err != nil {
+			return fmt.Errorf("failed to clear connection write deadline: %w", err)
+		}
+		return nil
 	}
-	if err := ec.conn.SetWriteDeadline(deadline); err != nil {
+	if err := conn.SetWriteDeadline(deadline); err != nil {
 		return fmt.Errorf("failed to set connection write deadline: %w", err)
 	}
 	return nil
 }
 
-func (ec *EmberClient) operationDeadline(ctx context.Context) (time.Time, bool) {
+func operationDeadline(timeout time.Duration, ctx context.Context) (time.Time, bool) {
 	var deadline time.Time
-	if ec.timeout > 0 {
-		deadline = time.Now().Add(ec.timeout)
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
 	}
 	if contextDeadline, ok := ctx.Deadline(); ok && (deadline.IsZero() || contextDeadline.Before(deadline)) {
 		deadline = contextDeadline
@@ -462,7 +565,7 @@ func (ec *EmberClient) operationDeadline(ctx context.Context) (time.Time, bool) 
 	return deadline, !deadline.IsZero()
 }
 
-func (ec *EmberClient) interruptOnCancel(ctx context.Context, read bool) func() {
+func interruptOnCancel(conn net.Conn, ctx context.Context, read bool) func() {
 	if ctx.Done() == nil {
 		return func() {}
 	}
@@ -471,9 +574,9 @@ func (ec *EmberClient) interruptOnCancel(ctx context.Context, read bool) func() 
 		select {
 		case <-ctx.Done():
 			if read {
-				_ = ec.conn.SetReadDeadline(time.Now())
+				_ = conn.SetReadDeadline(time.Now())
 			} else {
-				_ = ec.conn.SetWriteDeadline(time.Now())
+				_ = conn.SetWriteDeadline(time.Now())
 			}
 		case <-stopped:
 		}
@@ -492,16 +595,39 @@ func contextError(ctx context.Context) error {
 	return nil
 }
 
-func (ec *EmberClient) closeConn() error {
-	if ec.conn == nil {
+func (ec *EmberClient) connection() (net.Conn, time.Duration) {
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
+	return ec.conn, ec.timeout
+}
+
+func (ec *EmberClient) closeConnIf(conn net.Conn) error {
+	ec.stateMu.Lock()
+	if ec.conn != conn {
+		ec.stateMu.Unlock()
 		return nil
 	}
-
-	err := ec.conn.Close()
 	ec.conn = nil
 	ec.decoder = nil
 	ec.frames = nil
 	ec.pendingRoots = nil
+	ec.stateMu.Unlock()
+	return conn.Close()
+}
 
-	return err
+func (ec *EmberClient) popPendingRoot() (ember.RootMessage, bool) {
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
+	if len(ec.pendingRoots) == 0 {
+		return ember.RootMessage{}, false
+	}
+	message := ec.pendingRoots[0]
+	ec.pendingRoots = ec.pendingRoots[1:]
+	return message, true
+}
+
+func (ec *EmberClient) pushPendingRoot(message ember.RootMessage) {
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
+	ec.pendingRoots = append(ec.pendingRoots, message)
 }

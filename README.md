@@ -19,16 +19,16 @@ The project originated from the Zabbix Ember+ implementation and retains its AGP
 ```go
 client, err := emberclient.NewEmberClient("console.example", 9000)
 if err != nil {
-	return err
+    return err
 }
 if err := client.Connect(); err != nil {
-	return err
+    return err
 }
 defer client.Disconnect()
 
 tree, err := client.GetRootCollection()
 if err != nil {
-	return err
+    return err
 }
 
 parameter, err := tree.GetElementByPath("1.128.3")
@@ -48,26 +48,27 @@ Matrix operations use the exported Glow constants such as `ConnectionAbsolute`, 
 
 ```go
 response, err := client.SetMatrixConnections(ctx, "1.20", []ember.MatrixConnection{
-	{Target: 2, Sources: []int{7}, Operation: ember.ConnectionAbsolute},
+    {Target: 2, Sources: []int{7}, Operation: ember.ConnectionAbsolute},
 })
 ```
 
 ## Notifications and keep-alives
 
 `ReceiveRootContext` reads unsolicited parameter updates, stream collections, and invocation results. `Serve` runs this receive loop continuously and therefore also answers peer keep-alive requests while the application is otherwise idle.
+`Serve` uses the supplied context for its lifetime and does not stop merely because the client's per-operation timeout elapses.
 
 ```go
 err := client.Serve(ctx, func(message ember.RootMessage) error {
-	// Apply message.Elements updates or process message.Streams.
-	return nil
+    // Apply message.Elements updates or process message.Streams.
+    return nil
 })
 ```
 
-Use one goroutine as the connection owner. The request methods serialize themselves, but `Serve` must not run concurrently with request methods because ordinary Ember directory and value-change responses do not carry correlation identifiers. Applications that both issue requests and consume notifications should perform both activities in one connection-owner loop.
+Use one goroutine as the connection owner. The request methods serialize themselves, but `Serve` must not run concurrently with request methods because ordinary Ember directory and value-change responses do not carry correlation identifiers. Concurrent receive attempts return `emberclient.ErrReceiveActive` instead of consuming each other's messages. Applications that need continuous notifications and request/response operations at the same time should use separate connections.
 
 ## Compatibility API
 
-`ElementCollection.Populate` retains the original element/value representation for existing callers. New code should use `DecodeRoot` or `ElementCollection.PopulateGlow250`; these preserve signed `int64` values and expose the complete Glow 2.50 model.
+`ElementCollection.Populate` and the existing `GetElementCollection` methods retain the original element/value representation for existing callers. New code should use `DecodeRoot`, `ElementCollection.PopulateGlow250`, or `GetElementCollectionGlow250`; these preserve signed `int64` values and expose the complete Glow 2.50 model.
 
 `NewElementConnection` remains available as a compatibility alias. Prefer `NewElementCollection` in new code.
 

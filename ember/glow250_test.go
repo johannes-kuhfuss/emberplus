@@ -130,4 +130,43 @@ func TestParameterSetOrderAndNullableValues(t *testing.T) {
 	assert.True(t, decoded.HasDefault)
 	assert.Nil(t, decoded.Default)
 	assert.Equal(t, 1, decoded.ValueType)
+	assert.True(t, decoded.HasValueType)
+}
+
+func TestExplicitEnumTypeIsNotInferredAsInteger(t *testing.T) {
+	t.Parallel()
+
+	path, _ := ber.MarshalRelativeOID([]int{2, 4})
+	pathField, _ := ber.MarshalExplicit(0, path)
+	valueField, _ := ber.MarshalExplicit(2, ber.MarshalInteger(3))
+	typeField, _ := ber.MarshalExplicit(13, ber.MarshalInteger(6))
+	contents, _ := ber.MarshalContainer(ber.ClassUniversal, 17, valueField, typeField)
+	contentsField, _ := ber.MarshalExplicit(1, contents)
+	parameter, _ := ber.MarshalContainer(ber.ClassApplication, 9, pathField, contentsField)
+	root, err := encodeRoot(parameter)
+	require.NoError(t, err)
+
+	message, err := DecodeRoot(root)
+	require.NoError(t, err)
+	decoded, err := message.Elements.GetElementByPath("2.4")
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), decoded.Value)
+	assert.Equal(t, 6, decoded.ValueType)
+	assert.True(t, decoded.HasValueType)
+}
+
+func TestDecodeQualifiedFunctionKeepsQualifiedType(t *testing.T) {
+	t.Parallel()
+
+	path, _ := ber.MarshalRelativeOID([]int{1, 2})
+	pathField, _ := ber.MarshalExplicit(0, path)
+	function, _ := ber.MarshalContainer(ber.ClassApplication, 20, pathField)
+	root, err := encodeRoot(function)
+	require.NoError(t, err)
+
+	message, err := DecodeRoot(root)
+	require.NoError(t, err)
+	decoded, err := message.Elements.GetElementByPath("1.2")
+	require.NoError(t, err)
+	assert.Equal(t, QualifiedFunctionElement, decoded.ElementType)
 }

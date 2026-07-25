@@ -86,6 +86,12 @@ func (fc *fakeConn) SetReadDeadline(time.Time) error {
 }
 
 func (fc *fakeConn) SetWriteDeadline(time.Time) error {
+	if fc.deadlineErr != nil {
+		return fc.deadlineErr
+	}
+
+	fc.deadlines = append(fc.deadlines, time.Now())
+
 	return nil
 }
 
@@ -123,6 +129,47 @@ func validRootGlow() []byte {
 		0x6C, 0x50, 0x61, 0x74, 0x63, 0x68, 0x42, 0x61, 0x79, 0xA1, 0x02, 0x0C, 0x00, 0xA4, 0x02, 0x0C,
 		0x00, 0xA3, 0x03, 0x01, 0x01, 0xFF,
 	}
+}
+
+func parameterRootGlow(t *testing.T, withValue bool) []byte {
+	t.Helper()
+
+	path, err := asn1.MarshalRelativeOID([]int{1})
+	require.NoError(t, err)
+	pathField, err := asn1.MarshalExplicit(0, path)
+	require.NoError(t, err)
+	typeField, err := asn1.MarshalExplicit(13, asn1.MarshalInteger(1))
+	require.NoError(t, err)
+	fields := [][]byte{typeField}
+	if withValue {
+		valueField, marshalErr := asn1.MarshalExplicit(2, asn1.MarshalInteger(7))
+		require.NoError(t, marshalErr)
+		fields = append(fields, valueField)
+	}
+	contents, err := asn1.MarshalContainer(asn1.ClassUniversal, 17, fields...)
+	require.NoError(t, err)
+	contentsField, err := asn1.MarshalExplicit(1, contents)
+	require.NoError(t, err)
+	parameter, err := asn1.MarshalContainer(asn1.ClassApplication, 9, pathField, contentsField)
+	require.NoError(t, err)
+	wrapper, err := asn1.MarshalExplicit(0, parameter)
+	require.NoError(t, err)
+	collection, err := asn1.MarshalContainer(asn1.ClassApplication, 11, wrapper)
+	require.NoError(t, err)
+	root, err := asn1.MarshalContainer(asn1.ClassApplication, 0, collection)
+	require.NoError(t, err)
+	return root
+}
+
+func waitForReader(t *testing.T, ec *EmberClient) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		if !ec.readerMu.TryLock() {
+			return true
+		}
+		ec.readerMu.Unlock()
+		return false
+	}, time.Second, 5*time.Millisecond)
 }
 
 /* Example of how to call client
@@ -251,6 +298,7 @@ func TestWriteShortWriteReturnsError(t *testing.T) {
 
 	assert.Equal(t, 2, n)
 	require.ErrorIs(t, err, io.ErrShortWrite)
+	assert.False(t, ec.IsConnected())
 }
 
 func TestWriteDeadlineErrorReturnsError(t *testing.T) {
@@ -260,7 +308,7 @@ func TestWriteDeadlineErrorReturnsError(t *testing.T) {
 	n, err := ec.Write([]byte{1})
 
 	assert.Equal(t, 0, n)
-	require.ErrorContains(t, err, "failed to set connection deadline")
+	require.ErrorContains(t, err, "failed to set connection write deadline")
 }
 
 func TestReceiveSinglePacketReturnsGlowData(t *testing.T) {
@@ -366,6 +414,54 @@ func TestReceiveReadErrorReturnsError(t *testing.T) {
 
 	assert.Nil(t, got)
 	require.ErrorContains(t, err, "failed to read from connection")
+	assert.False(t, ec.IsConnected())
+}
+
+func TestServeIgnoresClientTimeoutAndRejectsConcurrentReader(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ec := &EmberClient{conn: client, timeout: 20 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handled := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		done <- ec.Serve(ctx, func(ember.RootMessage) error {
+			close(handled)
+			cancel()
+			return nil
+		})
+	}()
+	waitForReader(t, ec)
+
+	_, err := ec.GetRootCollection()
+	require.ErrorIs(t, err, ErrReceiveActive)
+
+	time.Sleep(60 * time.Millisecond)
+	_, err = server.Write(s101.Encode(validRootGlow(), s101.SinglePacket))
+	require.NoError(t, err)
+
+	select {
+	case <-handled:
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not process data after the client timeout")
+	}
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestServeReadFailureClearsConnection(t *testing.T) {
+	client, server := net.Pipe()
+	ec := &EmberClient{conn: client, timeout: time.Second}
+	done := make(chan error, 1)
+	go func() {
+		done <- ec.Serve(context.Background(), func(ember.RootMessage) error { return nil })
+	}()
+	waitForReader(t, ec)
+
+	require.NoError(t, server.Close())
+	require.Error(t, <-done)
+	assert.False(t, ec.IsConnected())
 }
 
 func TestPublicGetMethodsRequireConnection(t *testing.T) {
@@ -420,6 +516,32 @@ func TestGetElementCollectionContextReturnsPopulatedCollection(t *testing.T) {
 	assert.Equal(t, "1", el.Path)
 	assert.Equal(t, ember.ElementType(asn1.NodeType), el.ElementType)
 	assert.True(t, el.IsOnline)
+
+	frames, err := s101.NewStreamDecoder().Push(conn.written.Bytes())
+	require.NoError(t, err)
+	require.Len(t, frames, 2)
+	assert.Equal(t, byte(s101.FirstMultiPacket), frames[0].Flags)
+	assert.Equal(t, byte(s101.LastMultiPacket), frames[1].Flags)
+}
+
+func TestExistingGetterKeepsLegacyValuesAndGlow250IsExplicit(t *testing.T) {
+	legacyConn := &fakeConn{reads: [][]byte{s101.Encode(parameterRootGlow(t, false), s101.SinglePacket)}}
+	legacyClient := &EmberClient{conn: legacyConn, timeout: time.Second}
+
+	legacy, err := legacyClient.GetElementCollection(asn1.QualifiedParameterType, "")
+	require.NoError(t, err)
+	legacyElement, err := legacy.GetElementByPath("1")
+	require.NoError(t, err)
+	assert.Equal(t, 0, legacyElement.Value)
+
+	glowConn := &fakeConn{reads: [][]byte{s101.Encode(parameterRootGlow(t, false), s101.SinglePacket)}}
+	glowClient := &EmberClient{conn: glowConn, timeout: time.Second}
+	glow, err := glowClient.GetElementCollectionGlow250(asn1.QualifiedParameterType, "")
+	require.NoError(t, err)
+	glowElement, err := glow.GetElementByPath("1")
+	require.NoError(t, err)
+	assert.Nil(t, glowElement.Value)
+	assert.False(t, glowElement.HasValue)
 }
 
 func TestGetByTypeContextReturnsJSON(t *testing.T) {

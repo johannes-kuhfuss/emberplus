@@ -86,6 +86,7 @@ type parameter struct {
 	Default           any               `json:"default,omitempty"`
 	HasDefault        bool              `json:"has_default,omitempty"`
 	ValueType         int               `json:"type,omitempty"`
+	HasValueType      bool              `json:"has_value_type,omitempty"`
 	Formula           string            `json:"formula,omitempty"`
 	Step              int64             `json:"step,omitempty"`
 	StreamIdentifier  int64             `json:"stream_identifier,omitempty"`
@@ -118,6 +119,7 @@ type Element struct {
 	Default           any                 `json:"default,omitempty"`
 	HasDefault        bool                `json:"has_default,omitempty"`
 	ValueType         int                 `json:"type,omitempty"`
+	HasValueType      bool                `json:"has_value_type,omitempty"`
 	Formula           string              `json:"formula,omitempty"`
 	Step              int64               `json:"step,omitempty"`
 	StreamIdentifier  int64               `json:"stream_identifier,omitempty"`

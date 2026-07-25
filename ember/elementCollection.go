@@ -258,6 +258,7 @@ func (ec ElementCollection) MarshalJSON() ([]byte, error) {
 				Default:           v.Default,
 				HasDefault:        v.HasDefault,
 				ValueType:         v.ValueType,
+				HasValueType:      v.HasValueType,
 				Formula:           v.Formula,
 				Step:              v.Step,
 				StreamIdentifier:  v.StreamIdentifier,

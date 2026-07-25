@@ -199,7 +199,7 @@ func decodeElement(value ber.TLV) (*Element, error) {
 	case 19:
 		el.ElementType, el.Function = FunctionElement, &Function{}
 	case 20:
-		el.ElementType, el.Function, qualified = FunctionElement, &Function{}, true
+		el.ElementType, el.Function, qualified = QualifiedFunctionElement, &Function{}, true
 	case 2:
 		el.ElementType, el.Command = CommandElement, &Command{}
 	case 24:
@@ -323,6 +323,7 @@ func decodeParameterField(el *Element, tag uint64, value ber.TLV) error {
 		el.HasDefault = true
 		el.Default, err = decodeValue(value)
 	case 13:
+		el.HasValueType = true
 		el.ValueType, err = intValue(value)
 	case 14:
 		el.StreamIdentifier, err = value.Int64()
@@ -473,6 +474,9 @@ func storeUnknown(el *Element, tag uint64, value ber.TLV) {
 
 func finalizeParameterType(el *Element) {
 	if el.ElementType != ParameterElement && el.ElementType != QualifiedParameterElement {
+		return
+	}
+	if el.HasValueType {
 		return
 	}
 	if el.ValueType == 5 { // Trigger has precedence over inferred types.
