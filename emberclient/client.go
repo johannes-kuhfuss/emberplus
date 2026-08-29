@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"sync"
@@ -214,6 +215,14 @@ func (ec *EmberClient) nextFrame(ctx context.Context, useClientTimeout bool) (s1
 	for {
 		ec.stateMu.Lock()
 		if len(ec.frames) > 0 {
+
+			queueLen := len(ec.frames)
+
+			log.Printf(
+				"[EMBER DEBUG] consuming queued frame: queue=%d",
+				queueLen,
+			)
+
 			frame := ec.frames[0]
 			ec.frames = ec.frames[1:]
 			ec.stateMu.Unlock()
@@ -253,7 +262,18 @@ func (ec *EmberClient) nextFrame(ctx context.Context, useClientTimeout bool) (s1
 			return s101.Frame{}, fmt.Errorf("failed to decode S101 stream: %w", err)
 		}
 		ec.stateMu.Lock()
+		before := len(ec.frames)
 		ec.frames = append(ec.frames, frames...)
+		after := len(ec.frames)
+
+		log.Printf(
+			"[EMBER DEBUG] TCP read=%d bytes decoded=%d frames queue=%d->%d",
+			n,
+			len(frames),
+			before,
+			after,
+		)
+
 		ec.stateMu.Unlock()
 	}
 }
@@ -326,6 +346,17 @@ func (ec *EmberClient) getElementCollectionContext(
 	if _, err = ec.WriteContext(ctx, tr); err != nil {
 		return nil, fmt.Errorf("failed to write Ember request. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
+
+	ec.stateMu.Lock()
+	queued := len(ec.frames)
+	ec.stateMu.Unlock()
+
+	log.Printf(
+		"[EMBER DEBUG] GetDirectory type=%v path=%q queued-before-receive=%d",
+		emberType,
+		emberPath,
+		queued,
+	)
 
 	out, err := ec.receiveContext(ctx, true)
 	if err != nil {
