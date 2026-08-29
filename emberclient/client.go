@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,45 +16,100 @@ import (
 	"github.com/johannes-kuhfuss/emberplus/s101"
 )
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultTimeout            = 30 * time.Second
+	defaultNotificationBuffer = 256
 
-// ErrReceiveActive indicates that another operation currently owns the connection reader.
-var ErrReceiveActive = errors.New("connection receive loop is already active")
+	DiagnosticRequestBacklog       = "request_backlog"
+	DiagnosticNotificationOverflow = "notification_overflow"
+	DiagnosticReadPumpError        = "read_pump_error"
+)
 
+// Diagnostic describes an exceptional receive-pump condition. Diagnostics are
+// disabled unless SetDiagnosticHandler is called.
+type Diagnostic struct {
+	Kind                 string
+	Request              string
+	Path                 string
+	SkippedRoots         int
+	DroppedNotifications uint64
+	Duration             time.Duration
+	Err                  error
+}
+
+type receivedMessage struct {
+	raw     []byte
+	root    ember.RootMessage
+	rootErr error
+}
+
+type responseWaiter struct {
+	request string
+	path    string
+	started time.Time
+	skipped int
+	match   func(ember.RootMessage) bool
+	result  chan requestResult
+}
+
+type requestResult struct {
+	message receivedMessage
+	err     error
+}
+
+// EmberClient owns one permanent socket read pump. Request methods only write
+// and wait for messages routed to them by that pump.
 type EmberClient struct {
-	raddr        string
-	conn         net.Conn
-	timeout      time.Duration
-	decoder      *s101.StreamDecoder
-	frames       []s101.Frame
-	pendingRoots []ember.RootMessage
-	stateMu      sync.Mutex
-	readerMu     sync.Mutex
-	writeMu      sync.Mutex
-	requestMu    sync.Mutex
+	raddr   string
+	conn    net.Conn
+	timeout time.Duration
+
+	stateMu   sync.Mutex
+	writeMu   sync.Mutex
+	requestMu sync.Mutex
+
+	waiter          *responseWaiter
+	keepAliveWaiter chan error
+	notifications   chan receivedMessage
+	latestElements  map[string]*ember.Element
+	dropped         uint64
+	pumpCancel      context.CancelFunc
+	pumpDone        chan struct{}
+	pumpErr         error
+	diagnostic      func(Diagnostic)
 }
 
 func NewEmberClient(host string, port int) (*EmberClient, error) {
-	var ec EmberClient
-	if (port < 1) || (port > 65535) {
+	if port < 1 || port > 65535 {
 		return nil, errors.New("port must be between 1 and 65535")
 	}
 	if host == "" {
 		return nil, errors.New("host must be either a host name or an IP address")
 	}
-	portStr := strconv.Itoa(port)
-	ec.raddr = net.JoinHostPort(host, portStr)
-	ec.timeout = defaultTimeout
-	return &ec, nil
+	return &EmberClient{raddr: net.JoinHostPort(host, strconv.Itoa(port)), timeout: defaultTimeout}, nil
 }
 
-// SetTimeout configures the per-operation timeout for connect, read, and write calls.
-// Serve reads until its context is cancelled and does not use this timeout.
-// A zero or negative duration disables the timeout.
+// SetDiagnosticHandler installs an optional handler for backlog, overflow, and
+// read-pump errors. The handler must return promptly.
+func (ec *EmberClient) SetDiagnosticHandler(handler func(Diagnostic)) {
+	ec.stateMu.Lock()
+	ec.diagnostic = handler
+	ec.stateMu.Unlock()
+}
+
+func (ec *EmberClient) emit(event Diagnostic) {
+	ec.stateMu.Lock()
+	handler := ec.diagnostic
+	ec.stateMu.Unlock()
+	if handler != nil {
+		handler(event)
+	}
+}
+
 func (ec *EmberClient) SetTimeout(timeout time.Duration) {
 	ec.stateMu.Lock()
-	defer ec.stateMu.Unlock()
 	ec.timeout = timeout
+	ec.stateMu.Unlock()
 }
 
 func (ec *EmberClient) IsConnected() bool {
@@ -63,30 +118,56 @@ func (ec *EmberClient) IsConnected() bool {
 	return ec.conn != nil
 }
 
-func (ec *EmberClient) Connect() error {
-	return ec.ConnectContext(context.Background())
-}
+func (ec *EmberClient) Connect() error { return ec.ConnectContext(context.Background()) }
 
 func (ec *EmberClient) ConnectContext(ctx context.Context) error {
-	if !ec.readerMu.TryLock() {
-		return ErrReceiveActive
-	}
-	defer ec.readerMu.Unlock()
 	ec.stateMu.Lock()
-	defer ec.stateMu.Unlock()
 	if ec.conn != nil {
+		ec.stateMu.Unlock()
 		return errors.New("already connected")
 	}
+	timeout := ec.timeout
+	ec.stateMu.Unlock()
 
-	dialer := net.Dialer{Timeout: ec.timeout}
+	dialer := net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", ec.raddr)
 	if err != nil {
 		return fmt.Errorf("failed to connect to %s: %w", ec.raddr, err)
 	}
+	ec.stateMu.Lock()
+	if ec.conn != nil {
+		ec.stateMu.Unlock()
+		_ = conn.Close()
+		return errors.New("already connected")
+	}
+	ec.startPumpLocked(conn)
+	ec.stateMu.Unlock()
+	return nil
+}
+
+func (ec *EmberClient) startPumpLocked(conn net.Conn) {
+	ctx, cancel := context.WithCancel(context.Background())
+	notifications := make(chan receivedMessage, defaultNotificationBuffer)
+	done := make(chan struct{})
 	ec.conn = conn
-	ec.decoder = s101.NewStreamDecoder()
-	ec.frames = nil
-	ec.pendingRoots = nil
+	ec.notifications = notifications
+	ec.latestElements = make(map[string]*ember.Element)
+	ec.dropped = 0
+	ec.pumpErr = nil
+	ec.pumpCancel = cancel
+	ec.pumpDone = done
+	go ec.readPump(ctx, conn, notifications, done)
+}
+
+func (ec *EmberClient) ensurePump() error {
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
+	if ec.conn == nil {
+		return errors.New("not connected")
+	}
+	if ec.pumpDone == nil {
+		ec.startPumpLocked(ec.conn)
+	}
 	return nil
 }
 
@@ -96,14 +177,17 @@ func (ec *EmberClient) Disconnect() error {
 		ec.stateMu.Unlock()
 		return errors.New("not connected")
 	}
-	conn := ec.conn
+	conn, done, cancel := ec.conn, ec.pumpDone, ec.pumpCancel
 	ec.conn = nil
-	ec.decoder = nil
-	ec.frames = nil
-	ec.pendingRoots = nil
+	ec.failWaitersLocked(errors.New("disconnected"))
 	ec.stateMu.Unlock()
-
+	if cancel != nil {
+		cancel()
+	}
 	err := conn.Close()
+	if done != nil {
+		<-done
+	}
 	if err != nil {
 		return fmt.Errorf("failed to disconnect from %s: %w", ec.raddr, err)
 	}
@@ -114,7 +198,6 @@ func (ec *EmberClient) Write(data []byte) (int, error) {
 	return ec.WriteContext(context.Background(), data)
 }
 
-// WriteContext writes all data while honoring both the client timeout and context cancellation.
 func (ec *EmberClient) WriteContext(ctx context.Context, data []byte) (int, error) {
 	conn, timeout := ec.connection()
 	if conn == nil {
@@ -123,159 +206,115 @@ func (ec *EmberClient) WriteContext(ctx context.Context, data []byte) (int, erro
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-
 	ec.writeMu.Lock()
 	defer ec.writeMu.Unlock()
-
 	if err := setWriteDeadline(conn, timeout, ctx); err != nil {
-		_ = ec.closeConnIf(conn)
+		ec.stopConnection(conn, err)
 		return 0, err
 	}
 	stop := interruptOnCancel(conn, ctx, false)
 	defer stop()
-
 	n, err := conn.Write(data)
 	if err != nil {
 		if ctxErr := contextError(ctx); ctxErr != nil {
 			return n, ctxErr
 		}
-		_ = ec.closeConnIf(conn)
+		ec.stopConnection(conn, err)
 		return n, fmt.Errorf("error writing bytes: %w", err)
 	}
 	if n != len(data) {
-		_ = ec.closeConnIf(conn)
+		ec.stopConnection(conn, io.ErrShortWrite)
 		return n, io.ErrShortWrite
 	}
-
 	return n, nil
 }
 
+// Receive returns the next unsolicited complete Glow payload. Request
+// responses are routed directly to their requesting method.
 func (ec *EmberClient) Receive() ([]byte, error) {
 	return ec.ReceiveContext(context.Background())
 }
 
 func (ec *EmberClient) ReceiveContext(ctx context.Context) ([]byte, error) {
-	if !ec.readerMu.TryLock() {
-		return nil, ErrReceiveActive
+	message, err := ec.nextNotification(ctx, true)
+	if err != nil {
+		return nil, err
 	}
-	defer ec.readerMu.Unlock()
-	return ec.receiveContext(ctx, true)
+	return message.raw, nil
 }
 
-func (ec *EmberClient) receiveContext(ctx context.Context, useClientTimeout bool) ([]byte, error) {
-	var (
-		out   []byte
-		multi bool
-	)
-	if !ec.IsConnected() {
-		return nil, errors.New("not connected")
+// ReceiveRootContext returns the next unsolicited decoded Glow root.
+func (ec *EmberClient) ReceiveRootContext(ctx context.Context) (ember.RootMessage, error) {
+	message, err := ec.nextNotification(ctx, true)
+	if err != nil {
+		return ember.RootMessage{}, err
 	}
-
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		frame, err := ec.nextFrame(ctx, useClientTimeout)
-		if err != nil {
-			return nil, err
-		}
-		if frame.Command == s101.CommandKeepAliveRequest {
-			response, err := s101.EncodeFrame(s101.Frame{Framing: frame.Framing, Slot: frame.Slot, Command: s101.CommandKeepAliveResponse})
-			if err != nil {
-				return nil, err
-			}
-			if _, err := ec.WriteContext(ctx, response); err != nil {
-				return nil, fmt.Errorf("failed to answer S101 keep-alive: %w", err)
-			}
-			continue
-		}
-		if frame.Command == s101.CommandKeepAliveResponse {
-			continue
-		}
-		switch frame.Flags {
-		case s101.FirstMultiPacket, s101.BodyMultiPacket:
-			out = append(out, frame.Payload...)
-			multi = true
-			continue
-		case s101.LastMultiPacket:
-			out = append(out, frame.Payload...)
-			return out, nil
-		case s101.SinglePacket:
-			if multi {
-				return nil, errors.New("dropping message in the middle of a multi packet read")
-			}
-			return frame.Payload, nil
-		default:
-			return nil, fmt.Errorf("invalid S101 packet flag: %x", frame.Flags)
-		}
+	if message.rootErr != nil {
+		return ember.RootMessage{}, fmt.Errorf("failed to decode Glow root: %w", message.rootErr)
 	}
+	return message.root, nil
 }
 
-func (ec *EmberClient) nextFrame(ctx context.Context, useClientTimeout bool) (s101.Frame, error) {
-	for {
-		ec.stateMu.Lock()
-		if len(ec.frames) > 0 {
+func (ec *EmberClient) ReceiveRoot() (ember.RootMessage, error) {
+	return ec.ReceiveRootContext(context.Background())
+}
 
-			queueLen := len(ec.frames)
-
-			log.Printf(
-				"[EMBER DEBUG] consuming queued frame: queue=%d",
-				queueLen,
-			)
-
-			frame := ec.frames[0]
-			ec.frames = ec.frames[1:]
+func (ec *EmberClient) nextNotification(ctx context.Context, useTimeout bool) (receivedMessage, error) {
+	if err := ec.ensurePump(); err != nil {
+		return receivedMessage{}, err
+	}
+	ec.stateMu.Lock()
+	notifications, timeout := ec.notifications, ec.timeout
+	ec.stateMu.Unlock()
+	if useTimeout {
+		var cancel context.CancelFunc
+		ctx, cancel = contextWithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	select {
+	case message, ok := <-notifications:
+		if !ok {
+			ec.stateMu.Lock()
+			err := ec.pumpErr
 			ec.stateMu.Unlock()
-			return frame, nil
-		}
-		if ec.decoder == nil {
-			ec.decoder = s101.NewStreamDecoder()
-		}
-		decoder := ec.decoder
-		conn := ec.conn
-		timeout := ec.timeout
-		ec.stateMu.Unlock()
-		if conn == nil {
-			return s101.Frame{}, errors.New("not connected")
-		}
-		if !useClientTimeout {
-			timeout = 0
-		}
-		if err := setReadDeadline(conn, timeout, ctx); err != nil {
-			_ = ec.closeConnIf(conn)
-			return s101.Frame{}, err
-		}
-		stop := interruptOnCancel(conn, ctx, true)
-		response := make([]byte, 4096)
-		n, err := conn.Read(response)
-		stop()
-		if err != nil {
-			if ctxErr := contextError(ctx); ctxErr != nil {
-				return s101.Frame{}, ctxErr
+			if err == nil {
+				err = io.EOF
 			}
-			_ = ec.closeConnIf(conn)
-			return s101.Frame{}, fmt.Errorf("failed to read from connection: %w", err)
+			return receivedMessage{}, err
 		}
-		frames, err := decoder.Push(response[:n])
-		if err != nil {
-			_ = ec.closeConnIf(conn)
-			return s101.Frame{}, fmt.Errorf("failed to decode S101 stream: %w", err)
-		}
-		ec.stateMu.Lock()
-		before := len(ec.frames)
-		ec.frames = append(ec.frames, frames...)
-		after := len(ec.frames)
-
-		log.Printf(
-			"[EMBER DEBUG] TCP read=%d bytes decoded=%d frames queue=%d->%d",
-			n,
-			len(frames),
-			before,
-			after,
-		)
-
-		ec.stateMu.Unlock()
+		return message, nil
+	case <-ctx.Done():
+		return receivedMessage{}, ctx.Err()
 	}
+}
+
+// Serve processes unsolicited messages. It is safe to call request methods
+// concurrently; the read pump remains the sole connection reader.
+func (ec *EmberClient) Serve(ctx context.Context, handler func(ember.RootMessage) error) error {
+	if handler == nil {
+		return errors.New("nil Glow message handler")
+	}
+	for {
+		message, err := ec.nextNotification(ctx, false)
+		if err != nil {
+			return err
+		}
+		if message.rootErr != nil {
+			return fmt.Errorf("failed to decode Glow root: %w", message.rootErr)
+		}
+		if err := handler(message.root); err != nil {
+			return err
+		}
+	}
+}
+
+// LatestElement returns the most recently received top-level qualified element
+// for path. Returned elements are immutable snapshots owned by the decoder.
+func (ec *EmberClient) LatestElement(path string) (*ember.Element, bool) {
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
+	element, ok := ec.latestElements[path]
+	return element, ok
 }
 
 func (ec *EmberClient) GetRoot() ([]byte, error) {
@@ -295,12 +334,10 @@ func (ec *EmberClient) GetByTypeContext(ctx context.Context, emberType ember.Ele
 	if err != nil {
 		return nil, err
 	}
-
 	data, err := collection.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal Ember answer to JSON. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
-
 	return data, nil
 }
 
@@ -312,145 +349,123 @@ func (ec *EmberClient) GetElementCollectionContext(ctx context.Context, emberTyp
 	return ec.getElementCollectionContext(ctx, emberType, emberPath, false)
 }
 
-// GetElementCollectionGlow250 returns the complete Glow 2.50 value representation.
 func (ec *EmberClient) GetElementCollectionGlow250(emberType ember.ElementType, emberPath string) (ember.ElementCollection, error) {
 	return ec.GetElementCollectionGlow250Context(context.Background(), emberType, emberPath)
 }
 
-// GetElementCollectionGlow250Context returns the complete Glow 2.50 value representation.
-func (ec *EmberClient) GetElementCollectionGlow250Context(
-	ctx context.Context, emberType ember.ElementType, emberPath string,
-) (ember.ElementCollection, error) {
+func (ec *EmberClient) GetElementCollectionGlow250Context(ctx context.Context, emberType ember.ElementType, emberPath string) (ember.ElementCollection, error) {
 	return ec.getElementCollectionContext(ctx, emberType, emberPath, true)
 }
 
-func (ec *EmberClient) getElementCollectionContext(
-	ctx context.Context, emberType ember.ElementType, emberPath string, glow250 bool,
-) (ember.ElementCollection, error) {
-	ec.requestMu.Lock()
-	defer ec.requestMu.Unlock()
-	if !ec.readerMu.TryLock() {
-		return nil, ErrReceiveActive
-	}
-	defer ec.readerMu.Unlock()
-
+func (ec *EmberClient) getElementCollectionContext(ctx context.Context, emberType ember.ElementType, emberPath string, glow250 bool) (ember.ElementCollection, error) {
 	if !ec.IsConnected() {
 		return nil, errors.New("not connected")
 	}
-
 	glow, err := ember.EncodeGetDirectory(emberType, emberPath, -1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Ember request. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
-	tr := s101.Encode(glow, s101.FirstMultiPacket)
-	if _, err = ec.WriteContext(ctx, tr); err != nil {
-		return nil, fmt.Errorf("failed to write Ember request. Type: %v, Path: %v: %w", emberType, emberPath, err)
-	}
-
-	ec.stateMu.Lock()
-	queued := len(ec.frames)
-	ec.stateMu.Unlock()
-
-	log.Printf(
-		"[EMBER DEBUG] GetDirectory type=%v path=%q queued-before-receive=%d",
-		emberType,
-		emberPath,
-		queued,
-	)
-
-	out, err := ec.receiveContext(ctx, true)
+	message, err := ec.doRequest(ctx, "get_directory", emberPath, s101.Encode(glow, s101.FirstMultiPacket), directoryMatcher(emberType, emberPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Ember answer. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
-
 	collection := ember.NewElementCollection()
 	if glow250 {
-		err = collection.PopulateGlow250(asn1.NewDecoder(out))
+		err = collection.PopulateGlow250(asn1.NewDecoder(message.raw))
 	} else {
-		err = collection.Populate(asn1.NewDecoder(out))
+		err = collection.Populate(asn1.NewDecoder(message.raw))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to process Ember answer. Type: %v, Path: %v: %w", emberType, emberPath, err)
 	}
-
 	return collection, nil
 }
 
-// ReceiveRootContext reads the next complete Glow root message, including unsolicited notifications and streams.
-func (ec *EmberClient) ReceiveRootContext(ctx context.Context) (ember.RootMessage, error) {
-	if !ec.readerMu.TryLock() {
-		return ember.RootMessage{}, ErrReceiveActive
+func directoryMatcher(elementType ember.ElementType, path string) func(ember.RootMessage) bool {
+	isNode := elementType == ember.NodeElement || elementType == ember.QualifiedNodeElement ||
+		string(elementType) == asn1.NodeType || string(elementType) == asn1.QualifiedNodeType
+	return func(message ember.RootMessage) bool {
+		if message.Elements == nil {
+			return false
+		}
+		if len(message.Elements) == 0 {
+			return true
+		}
+		for key, element := range message.Elements {
+			if path == "" || isNode {
+				if parentPath(key.Path) == path {
+					continue
+				}
+				if key.Path == path && len(element.Children) > 0 {
+					continue
+				}
+				return false
+			}
+			if key.Path != path {
+				return false
+			}
+		}
+		return true
 	}
-	defer ec.readerMu.Unlock()
-	if message, ok := ec.popPendingRoot(); ok {
-		return message, nil
-	}
-	return ec.receiveRootDirect(ctx, true)
 }
 
-// ReceiveRoot reads the next complete Glow root message.
-func (ec *EmberClient) ReceiveRoot() (ember.RootMessage, error) {
-	return ec.ReceiveRootContext(context.Background())
+func parentPath(path string) string {
+	index := strings.LastIndexByte(path, '.')
+	if index < 0 {
+		return ""
+	}
+	return path[:index]
 }
 
-func (ec *EmberClient) receiveRootDirect(ctx context.Context, useClientTimeout bool) (ember.RootMessage, error) {
-	data, err := ec.receiveContext(ctx, useClientTimeout)
-	if err != nil {
-		return ember.RootMessage{}, err
-	}
-	message, err := ember.DecodeRoot(data)
-	if err != nil {
-		return ember.RootMessage{}, fmt.Errorf("failed to decode Glow root: %w", err)
-	}
-	return message, nil
-}
-
-// SetParameter changes a parameter value and returns the provider's response.
 func (ec *EmberClient) SetParameter(ctx context.Context, path string, value any) (ember.RootMessage, error) {
 	glow, err := ember.EncodeSetParameter(path, value)
 	if err != nil {
 		return ember.RootMessage{}, err
 	}
-	return ec.exchange(ctx, glow)
+	message, err := ec.doRequest(ctx, "set_parameter", path, s101.Encode(glow, s101.SinglePacket), elementPathMatcher(path, ember.ParameterElement, ember.QualifiedParameterElement))
+	return message.root, err
 }
 
-// SetMatrixConnections changes one or more matrix connections.
 func (ec *EmberClient) SetMatrixConnections(ctx context.Context, path string, connections []ember.MatrixConnection) (ember.RootMessage, error) {
 	glow, err := ember.EncodeMatrixConnections(path, connections)
 	if err != nil {
 		return ember.RootMessage{}, err
 	}
-	return ec.exchange(ctx, glow)
+	message, err := ec.doRequest(ctx, "set_matrix", path, s101.Encode(glow, s101.SinglePacket), elementPathMatcher(path, ember.MatrixElement, ember.QualifiedMatrixElement))
+	return message.root, err
 }
 
-// Invoke calls a Glow function and waits for its invocation result.
+func elementPathMatcher(path string, types ...ember.ElementType) func(ember.RootMessage) bool {
+	return func(message ember.RootMessage) bool {
+		for key, element := range message.Elements {
+			if key.Path != path {
+				continue
+			}
+			for _, elementType := range types {
+				if element.ElementType == elementType {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+
 func (ec *EmberClient) Invoke(ctx context.Context, path string, id int64, arguments ...any) (*ember.InvocationResult, error) {
 	glow, err := ember.EncodeInvocation(path, id, arguments)
 	if err != nil {
 		return nil, err
 	}
-	ec.requestMu.Lock()
-	defer ec.requestMu.Unlock()
-	if !ec.readerMu.TryLock() {
-		return nil, ErrReceiveActive
+	match := func(message ember.RootMessage) bool {
+		return message.InvocationResult != nil && (id == 0 || message.InvocationResult.ID == id)
 	}
-	defer ec.readerMu.Unlock()
-	if _, err := ec.WriteContext(ctx, s101.Encode(glow, s101.SinglePacket)); err != nil {
+	message, err := ec.doRequest(ctx, "invoke", path, s101.Encode(glow, s101.SinglePacket), match)
+	if err != nil {
 		return nil, err
 	}
-	for {
-		message, err := ec.receiveRootDirect(ctx, true)
-		if err != nil {
-			return nil, err
-		}
-		if message.InvocationResult != nil && (id == 0 || message.InvocationResult.ID == id) {
-			return message.InvocationResult, nil
-		}
-		ec.pushPendingRoot(message)
-	}
+	return message.root.InvocationResult, nil
 }
 
-// Subscribe changes the subscription state of a parameter.
 func (ec *EmberClient) Subscribe(ctx context.Context, elementType ember.ElementType, path string, subscribe bool) error {
 	glow, err := ember.EncodeSubscription(elementType, path, subscribe)
 	if err != nil {
@@ -458,22 +473,32 @@ func (ec *EmberClient) Subscribe(ctx context.Context, elementType ember.ElementT
 	}
 	ec.requestMu.Lock()
 	defer ec.requestMu.Unlock()
-	if !ec.readerMu.TryLock() {
-		return ErrReceiveActive
+	if err := ec.ensurePump(); err != nil {
+		return err
 	}
-	defer ec.readerMu.Unlock()
 	_, err = ec.WriteContext(ctx, s101.Encode(glow, s101.SinglePacket))
 	return err
 }
 
-// KeepAlive sends an S101 keep-alive request and waits for the response.
+// KeepAlive sends a request; the pump routes its frame-level response without
+// disturbing Glow messages.
 func (ec *EmberClient) KeepAlive(ctx context.Context) error {
 	ec.requestMu.Lock()
 	defer ec.requestMu.Unlock()
-	if !ec.readerMu.TryLock() {
-		return ErrReceiveActive
+	ctx, cancel := ec.operationContext(ctx)
+	defer cancel()
+	result := make(chan error, 1)
+	ec.stateMu.Lock()
+	if ec.conn == nil {
+		ec.stateMu.Unlock()
+		return errors.New("not connected")
 	}
-	defer ec.readerMu.Unlock()
+	ec.keepAliveWaiter = result
+	if ec.pumpDone == nil {
+		ec.startPumpLocked(ec.conn)
+	}
+	ec.stateMu.Unlock()
+	defer ec.clearKeepAliveWaiter(result)
 	request, err := s101.EncodeKeepAlive(s101.CommandKeepAliveRequest)
 	if err != nil {
 		return err
@@ -481,94 +506,270 @@ func (ec *EmberClient) KeepAlive(ctx context.Context) error {
 	if _, err := ec.WriteContext(ctx, request); err != nil {
 		return err
 	}
-	var deferred []s101.Frame
-	defer func() {
-		ec.stateMu.Lock()
-		ec.frames = append(deferred, ec.frames...)
-		ec.stateMu.Unlock()
-	}()
-	for {
-		frame, err := ec.nextFrame(ctx, true)
-		if err != nil {
-			return err
-		}
-		switch frame.Command {
-		case s101.CommandKeepAliveResponse:
-			return nil
-		case s101.CommandKeepAliveRequest:
-			response, err := s101.EncodeFrame(s101.Frame{Framing: frame.Framing, Slot: frame.Slot, Command: s101.CommandKeepAliveResponse})
-			if err != nil {
-				return err
-			}
-			if _, err := ec.WriteContext(ctx, response); err != nil {
-				return err
-			}
-		default:
-			deferred = append(deferred, frame)
-		}
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
-// Serve continuously reads notifications, streams, and invocation results.
-// Keeping Serve active also guarantees that peer keep-alive requests are answered while the client is otherwise idle.
-// Do not call request methods concurrently with Serve; use one goroutine as the connection owner.
-func (ec *EmberClient) Serve(ctx context.Context, handler func(ember.RootMessage) error) error {
-	if handler == nil {
-		return errors.New("nil Glow message handler")
+func (ec *EmberClient) clearKeepAliveWaiter(waiter chan error) {
+	ec.stateMu.Lock()
+	if ec.keepAliveWaiter == waiter {
+		ec.keepAliveWaiter = nil
 	}
-	if !ec.readerMu.TryLock() {
-		return ErrReceiveActive
-	}
-	defer ec.readerMu.Unlock()
-	for {
-		var (
-			message ember.RootMessage
-			err     error
-		)
-		if pending, ok := ec.popPendingRoot(); ok {
-			message = pending
-		} else {
-			message, err = ec.receiveRootDirect(ctx, false)
-		}
-		if err != nil {
-			return err
-		}
-		if err := handler(message); err != nil {
-			return err
-		}
-	}
+	ec.stateMu.Unlock()
 }
 
-func (ec *EmberClient) exchange(ctx context.Context, glow []byte) (ember.RootMessage, error) {
+func (ec *EmberClient) doRequest(ctx context.Context, request, path string, wire []byte, match func(ember.RootMessage) bool) (receivedMessage, error) {
 	ec.requestMu.Lock()
 	defer ec.requestMu.Unlock()
-	if !ec.readerMu.TryLock() {
-		return ember.RootMessage{}, ErrReceiveActive
+	ctx, cancel := ec.operationContext(ctx)
+	defer cancel()
+	waiter := &responseWaiter{request: request, path: path, started: time.Now(), match: match, result: make(chan requestResult, 1)}
+	ec.stateMu.Lock()
+	if ec.conn == nil {
+		ec.stateMu.Unlock()
+		return receivedMessage{}, errors.New("not connected")
 	}
-	defer ec.readerMu.Unlock()
-	if !ec.IsConnected() {
-		return ember.RootMessage{}, errors.New("not connected")
+	ec.waiter = waiter
+	if ec.pumpDone == nil {
+		ec.startPumpLocked(ec.conn)
 	}
-	if _, err := ec.WriteContext(ctx, s101.Encode(glow, s101.SinglePacket)); err != nil {
-		return ember.RootMessage{}, err
+	ec.stateMu.Unlock()
+	defer ec.clearWaiter(waiter)
+	if _, err := ec.WriteContext(ctx, wire); err != nil {
+		return receivedMessage{}, err
 	}
-	// A queued root is an earlier unsolicited message. The response to this
-	// request must come from the wire so notification delivery stays ordered.
-	return ec.receiveRootDirect(ctx, true)
+	select {
+	case result := <-waiter.result:
+		return result.message, result.err
+	case <-ctx.Done():
+		return receivedMessage{}, ctx.Err()
+	}
 }
 
-func setReadDeadline(conn net.Conn, timeout time.Duration, ctx context.Context) error {
-	deadline, ok := operationDeadline(timeout, ctx)
-	if !ok {
-		if err := conn.SetReadDeadline(time.Time{}); err != nil {
-			return fmt.Errorf("failed to clear connection read deadline: %w", err)
-		}
-		return nil
+func (ec *EmberClient) clearWaiter(waiter *responseWaiter) {
+	ec.stateMu.Lock()
+	if ec.waiter == waiter {
+		ec.waiter = nil
 	}
-	if err := conn.SetReadDeadline(deadline); err != nil {
-		return fmt.Errorf("failed to set connection read deadline: %w", err)
+	ec.stateMu.Unlock()
+}
+
+func (ec *EmberClient) operationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ec.stateMu.Lock()
+	timeout := ec.timeout
+	ec.stateMu.Unlock()
+	return contextWithTimeout(ctx, timeout)
+}
+
+func contextWithTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (ec *EmberClient) readPump(ctx context.Context, conn net.Conn, notifications chan receivedMessage, done chan struct{}) {
+	defer close(done)
+	defer close(notifications)
+	decoder := s101.NewStreamDecoder()
+	var payload []byte
+	multipart := false
+	buffer := make([]byte, 4096)
+	for {
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			ec.finishPump(conn, fmt.Errorf("failed to clear connection read deadline: %w", err))
+			return
+		}
+		n, err := conn.Read(buffer)
+		if err != nil {
+			if ctx.Err() != nil {
+				ec.finishPump(conn, ctx.Err())
+			} else {
+				ec.finishPump(conn, fmt.Errorf("failed to read from connection: %w", err))
+			}
+			return
+		}
+		frames, err := decoder.Push(buffer[:n])
+		if err != nil {
+			ec.finishPump(conn, fmt.Errorf("failed to decode S101 stream: %w", err))
+			return
+		}
+		for _, frame := range frames {
+			switch frame.Command {
+			case s101.CommandKeepAliveRequest:
+				if err := ec.answerKeepAlive(ctx, frame); err != nil {
+					ec.finishPump(conn, err)
+					return
+				}
+				continue
+			case s101.CommandKeepAliveResponse:
+				ec.routeKeepAlive(nil)
+				continue
+			case s101.CommandEmber:
+			default:
+				ec.finishPump(conn, fmt.Errorf("unsupported S101 command: %d", frame.Command))
+				return
+			}
+
+			complete := false
+			switch frame.Flags {
+			case s101.FirstMultiPacket:
+				payload = append(payload[:0], frame.Payload...)
+				multipart = true
+			case s101.BodyMultiPacket:
+				if !multipart {
+					ec.finishPump(conn, errors.New("S101 body packet without first packet"))
+					return
+				}
+				payload = append(payload, frame.Payload...)
+			case s101.LastMultiPacket:
+				if !multipart {
+					ec.finishPump(conn, errors.New("S101 last packet without first packet"))
+					return
+				}
+				payload = append(payload, frame.Payload...)
+				complete = true
+				multipart = false
+			case s101.SinglePacket:
+				if multipart {
+					ec.finishPump(conn, errors.New("single packet in the middle of a multipart message"))
+					return
+				}
+				payload = append(payload[:0], frame.Payload...)
+				complete = true
+			default:
+				ec.finishPump(conn, fmt.Errorf("invalid S101 packet flag: %x", frame.Flags))
+				return
+			}
+			if complete {
+				raw := append([]byte(nil), payload...)
+				root, rootErr := ember.DecodeRoot(raw)
+				ec.routeMessage(receivedMessage{raw: raw, root: root, rootErr: rootErr}, notifications)
+				payload = payload[:0]
+			}
+		}
+	}
+}
+
+func (ec *EmberClient) answerKeepAlive(ctx context.Context, frame s101.Frame) error {
+	response, err := s101.EncodeFrame(s101.Frame{Framing: frame.Framing, Slot: frame.Slot, Command: s101.CommandKeepAliveResponse})
+	if err != nil {
+		return err
+	}
+	if _, err := ec.WriteContext(ctx, response); err != nil {
+		return fmt.Errorf("failed to answer S101 keep-alive: %w", err)
 	}
 	return nil
+}
+
+func (ec *EmberClient) routeMessage(message receivedMessage, notifications chan receivedMessage) {
+	var diagnostic *Diagnostic
+	ec.stateMu.Lock()
+	if message.rootErr == nil {
+		for key, element := range message.root.Elements {
+			ec.latestElements[key.Path] = element
+		}
+	}
+	waiter := ec.waiter
+	if waiter != nil && message.rootErr == nil && waiter.match(message.root) {
+		ec.waiter = nil
+		waiter.result <- requestResult{message: message}
+		if waiter.skipped > 0 {
+			diagnostic = &Diagnostic{Kind: DiagnosticRequestBacklog, Request: waiter.request, Path: waiter.path, SkippedRoots: waiter.skipped, Duration: time.Since(waiter.started)}
+		}
+		ec.stateMu.Unlock()
+		if diagnostic != nil {
+			ec.emit(*diagnostic)
+		}
+		return
+	}
+	if waiter != nil {
+		waiter.skipped++
+	}
+	ec.stateMu.Unlock()
+
+	select {
+	case notifications <- message:
+		return
+	default:
+	}
+	select {
+	case <-notifications:
+	default:
+	}
+	ec.stateMu.Lock()
+	ec.dropped++
+	dropped := ec.dropped
+	ec.stateMu.Unlock()
+	select {
+	case notifications <- message:
+	default:
+	}
+	ec.emit(Diagnostic{Kind: DiagnosticNotificationOverflow, DroppedNotifications: dropped})
+}
+
+func (ec *EmberClient) routeKeepAlive(err error) {
+	ec.stateMu.Lock()
+	waiter := ec.keepAliveWaiter
+	if waiter != nil {
+		ec.keepAliveWaiter = nil
+	}
+	ec.stateMu.Unlock()
+	if waiter != nil {
+		waiter <- err
+	}
+}
+
+func (ec *EmberClient) finishPump(conn net.Conn, err error) {
+	ec.stateMu.Lock()
+	if ec.conn == conn {
+		ec.conn = nil
+		ec.pumpErr = err
+		ec.failWaitersLocked(err)
+	}
+	ec.stateMu.Unlock()
+	_ = conn.Close()
+	if !errors.Is(err, context.Canceled) {
+		ec.emit(Diagnostic{Kind: DiagnosticReadPumpError, Err: err})
+	}
+}
+
+func (ec *EmberClient) failWaitersLocked(err error) {
+	if ec.waiter != nil {
+		ec.waiter.result <- requestResult{err: err}
+		ec.waiter = nil
+	}
+	if ec.keepAliveWaiter != nil {
+		ec.keepAliveWaiter <- err
+		ec.keepAliveWaiter = nil
+	}
+}
+
+func (ec *EmberClient) stopConnection(conn net.Conn, cause error) {
+	ec.stateMu.Lock()
+	if ec.conn != conn {
+		ec.stateMu.Unlock()
+		return
+	}
+	cancel := ec.pumpCancel
+	ec.conn = nil
+	ec.pumpErr = cause
+	ec.failWaitersLocked(cause)
+	ec.stateMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	_ = conn.Close()
+}
+
+func (ec *EmberClient) connection() (net.Conn, time.Duration) {
+	ec.stateMu.Lock()
+	defer ec.stateMu.Unlock()
+	return ec.conn, ec.timeout
 }
 
 func setWriteDeadline(conn net.Conn, timeout time.Duration, ctx context.Context) error {
@@ -624,41 +825,4 @@ func contextError(ctx context.Context) error {
 		return context.DeadlineExceeded
 	}
 	return nil
-}
-
-func (ec *EmberClient) connection() (net.Conn, time.Duration) {
-	ec.stateMu.Lock()
-	defer ec.stateMu.Unlock()
-	return ec.conn, ec.timeout
-}
-
-func (ec *EmberClient) closeConnIf(conn net.Conn) error {
-	ec.stateMu.Lock()
-	if ec.conn != conn {
-		ec.stateMu.Unlock()
-		return nil
-	}
-	ec.conn = nil
-	ec.decoder = nil
-	ec.frames = nil
-	ec.pendingRoots = nil
-	ec.stateMu.Unlock()
-	return conn.Close()
-}
-
-func (ec *EmberClient) popPendingRoot() (ember.RootMessage, bool) {
-	ec.stateMu.Lock()
-	defer ec.stateMu.Unlock()
-	if len(ec.pendingRoots) == 0 {
-		return ember.RootMessage{}, false
-	}
-	message := ec.pendingRoots[0]
-	ec.pendingRoots = ec.pendingRoots[1:]
-	return message, true
-}
-
-func (ec *EmberClient) pushPendingRoot(message ember.RootMessage) {
-	ec.stateMu.Lock()
-	defer ec.stateMu.Unlock()
-	ec.pendingRoots = append(ec.pendingRoots, message)
 }

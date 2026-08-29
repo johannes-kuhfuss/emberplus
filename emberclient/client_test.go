@@ -161,14 +161,52 @@ func parameterRootGlow(t *testing.T, withValue bool) []byte {
 	return root
 }
 
+func parameterUpdateGlow(t *testing.T, path string, value int64) []byte {
+	t.Helper()
+	glow, err := ember.EncodeSetParameter(path, value)
+	require.NoError(t, err)
+	return glow
+}
+
+func invocationResultGlow(t *testing.T, id int64, success bool) []byte {
+	t.Helper()
+	idField, err := asn1.MarshalExplicit(0, asn1.MarshalInteger(id))
+	require.NoError(t, err)
+	successField, err := asn1.MarshalExplicit(1, asn1.MarshalBoolean(success))
+	require.NoError(t, err)
+	result, err := asn1.MarshalContainer(asn1.ClassApplication, 23, idField, successField)
+	require.NoError(t, err)
+	root, err := asn1.MarshalContainer(asn1.ClassApplication, 0, result)
+	require.NoError(t, err)
+	return root
+}
+
+func multipartS101(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	cut := len(payload) / 2
+	first, err := s101.EncodeFrame(s101.Frame{
+		Framing: s101.FramingEscaped,
+		Command: s101.CommandEmber,
+		Flags:   s101.FirstMultiPacket,
+		Payload: payload[:cut],
+	})
+	require.NoError(t, err)
+	last, err := s101.EncodeFrame(s101.Frame{
+		Framing: s101.FramingEscaped,
+		Command: s101.CommandEmber,
+		Flags:   s101.LastMultiPacket,
+		Payload: payload[cut:],
+	})
+	require.NoError(t, err)
+	return append(first, last...)
+}
+
 func waitForReader(t *testing.T, ec *EmberClient) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		if !ec.readerMu.TryLock() {
-			return true
-		}
-		ec.readerMu.Unlock()
-		return false
+		ec.stateMu.Lock()
+		defer ec.stateMu.Unlock()
+		return ec.pumpDone != nil
 	}, time.Second, 5*time.Millisecond)
 }
 
@@ -417,7 +455,7 @@ func TestReceiveReadErrorReturnsError(t *testing.T) {
 	assert.False(t, ec.IsConnected())
 }
 
-func TestServeIgnoresClientTimeoutAndRejectsConcurrentReader(t *testing.T) {
+func TestServeIgnoresClientTimeoutAndAllowsConcurrentRequest(t *testing.T) {
 	client, server := net.Pipe()
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	ec := &EmberClient{conn: client, timeout: 20 * time.Millisecond}
@@ -435,8 +473,17 @@ func TestServeIgnoresClientTimeoutAndRejectsConcurrentReader(t *testing.T) {
 	}()
 	waitForReader(t, ec)
 
-	_, err := ec.GetRootCollection()
-	require.ErrorIs(t, err, ErrReceiveActive)
+	requestDone := make(chan error, 1)
+	go func() {
+		_, err := ec.GetRootCollection()
+		requestDone <- err
+	}()
+	requestBuffer := make([]byte, 4096)
+	_, err := server.Read(requestBuffer)
+	require.NoError(t, err)
+	_, err = server.Write(s101.Encode(validRootGlow(), s101.SinglePacket))
+	require.NoError(t, err)
+	require.NoError(t, <-requestDone)
 
 	time.Sleep(60 * time.Millisecond)
 	_, err = server.Write(s101.Encode(validRootGlow(), s101.SinglePacket))
@@ -568,4 +615,177 @@ func TestGetElementCollectionContextReceiveErrorClosesConnection(t *testing.T) {
 	require.ErrorContains(t, err, "failed to get Ember answer")
 	assert.True(t, conn.closed)
 	assert.False(t, ec.IsConnected())
+}
+
+func TestGetDirectoryRoutesQueuedNotificationsBeforeResponse(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ec := &EmberClient{conn: client, timeout: time.Second}
+	diagnostics := make(chan Diagnostic, 1)
+	ec.SetDiagnosticHandler(func(event Diagnostic) {
+		if event.Kind == DiagnosticRequestBacklog {
+			diagnostics <- event
+		}
+	})
+
+	done := make(chan struct {
+		collection ember.ElementCollection
+		err        error
+	}, 1)
+	go func() {
+		collection, err := ec.GetElementCollectionGlow250(asn1.QualifiedNodeType, "0.2")
+		done <- struct {
+			collection ember.ElementCollection
+			err        error
+		}{collection, err}
+	}()
+
+	request := make([]byte, 4096)
+	_, err := server.Read(request)
+	require.NoError(t, err)
+	first := parameterUpdateGlow(t, "9.1", 1)
+	second := parameterUpdateGlow(t, "9.2", 2)
+	response := parameterUpdateGlow(t, "0.2.1", 3)
+	wire := append(s101.Encode(first, s101.SinglePacket), s101.Encode(second, s101.SinglePacket)...)
+	wire = append(wire, s101.Encode(response, s101.SinglePacket)...)
+	_, err = server.Write(wire)
+	require.NoError(t, err)
+
+	result := <-done
+	require.NoError(t, result.err)
+	element, err := result.collection.GetElementByPath("0.2.1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), element.Value)
+
+	for _, path := range []string{"9.1", "9.2"} {
+		message, receiveErr := ec.ReceiveRoot()
+		require.NoError(t, receiveErr)
+		_, getErr := message.Elements.GetElementByPath(path)
+		require.NoError(t, getErr)
+	}
+	event := <-diagnostics
+	assert.Equal(t, 2, event.SkippedRoots)
+	assert.Equal(t, "0.2", event.Path)
+}
+
+func TestReadPumpReassemblesMultipartNotificationBeforeResponse(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ec := &EmberClient{conn: client, timeout: time.Second}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ec.GetElementCollectionGlow250(asn1.QualifiedNodeType, "0.2")
+		done <- err
+	}()
+	request := make([]byte, 4096)
+	_, err := server.Read(request)
+	require.NoError(t, err)
+	notification := parameterUpdateGlow(t, "9.1", 7)
+	wire := append(multipartS101(t, notification), s101.Encode(parameterUpdateGlow(t, "0.2.1", 8), s101.SinglePacket)...)
+	_, err = server.Write(wire)
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+
+	message, err := ec.ReceiveRoot()
+	require.NoError(t, err)
+	element, err := message.Elements.GetElementByPath("9.1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), element.Value)
+}
+
+func TestSetParameterWaitsForMatchingPath(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ec := &EmberClient{conn: client, timeout: time.Second}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ec.SetParameter(context.Background(), "1.2", int64(42))
+		done <- err
+	}()
+	request := make([]byte, 4096)
+	_, err := server.Read(request)
+	require.NoError(t, err)
+	wire := append(s101.Encode(parameterUpdateGlow(t, "8.8", 1), s101.SinglePacket), s101.Encode(parameterUpdateGlow(t, "1.2", 42), s101.SinglePacket)...)
+	_, err = server.Write(wire)
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+
+	message, err := ec.ReceiveRoot()
+	require.NoError(t, err)
+	_, err = message.Elements.GetElementByPath("8.8")
+	require.NoError(t, err)
+}
+
+func TestInvokeRoutesUnrelatedRootAndMatchesID(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ec := &EmberClient{conn: client, timeout: time.Second}
+	done := make(chan *ember.InvocationResult, 1)
+	errs := make(chan error, 1)
+	go func() {
+		result, err := ec.Invoke(context.Background(), "1.4", 51, int64(1))
+		done <- result
+		errs <- err
+	}()
+	request := make([]byte, 4096)
+	_, err := server.Read(request)
+	require.NoError(t, err)
+	wire := append(s101.Encode(parameterUpdateGlow(t, "7.1", 3), s101.SinglePacket), s101.Encode(invocationResultGlow(t, 51, true), s101.SinglePacket)...)
+	_, err = server.Write(wire)
+	require.NoError(t, err)
+	result := <-done
+	require.NoError(t, <-errs)
+	require.NotNil(t, result)
+	assert.Equal(t, int64(51), result.ID)
+	assert.True(t, result.Success)
+
+	message, err := ec.ReceiveRoot()
+	require.NoError(t, err)
+	_, err = message.Elements.GetElementByPath("7.1")
+	require.NoError(t, err)
+}
+
+func TestKeepAliveDoesNotConsumeGlowNotification(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ec := &EmberClient{conn: client, timeout: time.Second}
+	done := make(chan error, 1)
+	go func() { done <- ec.KeepAlive(context.Background()) }()
+	request := make([]byte, 128)
+	_, err := server.Read(request)
+	require.NoError(t, err)
+	response, err := s101.EncodeKeepAlive(s101.CommandKeepAliveResponse)
+	require.NoError(t, err)
+	wire := append(s101.Encode(parameterUpdateGlow(t, "6.1", 4), s101.SinglePacket), response...)
+	_, err = server.Write(wire)
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	message, err := ec.ReceiveRoot()
+	require.NoError(t, err)
+	_, err = message.Elements.GetElementByPath("6.1")
+	require.NoError(t, err)
+}
+
+func TestNotificationOverflowPreservesLatestElementAndReportsDrop(t *testing.T) {
+	ec := &EmberClient{latestElements: make(map[string]*ember.Element)}
+	notifications := make(chan receivedMessage, 2)
+	diagnostics := make(chan Diagnostic, 2)
+	ec.SetDiagnosticHandler(func(event Diagnostic) { diagnostics <- event })
+	for value := int64(1); value <= 3; value++ {
+		raw := parameterUpdateGlow(t, "5.1", value)
+		root, err := ember.DecodeRoot(raw)
+		require.NoError(t, err)
+		ec.routeMessage(receivedMessage{raw: raw, root: root}, notifications)
+	}
+
+	element, ok := ec.LatestElement("5.1")
+	require.True(t, ok)
+	assert.Equal(t, int64(3), element.Value)
+	event := <-diagnostics
+	assert.Equal(t, DiagnosticNotificationOverflow, event.Kind)
+	assert.Equal(t, uint64(1), event.DroppedNotifications)
+	oldest := <-notifications
+	oldestElement, err := oldest.root.Elements.GetElementByPath("5.1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), oldestElement.Value)
 }

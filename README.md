@@ -54,8 +54,7 @@ response, err := client.SetMatrixConnections(ctx, "1.20", []ember.MatrixConnecti
 
 ## Notifications and keep-alives
 
-`ReceiveRootContext` reads unsolicited parameter updates, stream collections, and invocation results. `Serve` runs this receive loop continuously and therefore also answers peer keep-alive requests while the application is otherwise idle.
-`Serve` uses the supplied context for its lifetime and does not stop merely because the client's per-operation timeout elapses.
+Each connected client has one permanent read pump. It reassembles S101 messages, answers keep-alives, matches request responses, and routes unrelated Glow roots to the notification API. `Serve`, `ReceiveRootContext`, and request methods can therefore run concurrently on one connection. `Serve` uses the supplied context for its lifetime and does not stop merely because the client's per-operation timeout elapses.
 
 ```go
 err := client.Serve(ctx, func(message ember.RootMessage) error {
@@ -64,12 +63,23 @@ err := client.Serve(ctx, func(message ember.RootMessage) error {
 })
 ```
 
-Use one goroutine as the connection owner. The request methods serialize themselves, but `Serve` must not run concurrently with request methods because ordinary Ember directory and value-change responses do not carry correlation identifiers. Concurrent receive attempts return `emberclient.ErrReceiveActive` instead of consuming each other's messages. Applications that need continuous notifications and request/response operations at the same time should use separate connections.
+Only one notification consumer should use `Serve`, `ReceiveRoot`, or `Receive` at a time; those APIs share one bounded notification queue. Under overload the oldest queued notification is discarded to preserve recency. `LatestElement` retains the newest top-level element update by path even if a notification event is discarded.
 
-## Compatibility API
+For monitoring, enumerate the required directory once, run `Serve` continuously, and expose the resulting latest state to the metrics collector. Repeated directory polling is unnecessary because GetDirectory establishes update traffic for ordinary Ember elements.
+
+Optional diagnostics report only actionable pump conditions: messages skipped while matching a response, notification overflow, and terminal read-pump errors.
+
+```go
+client.SetDiagnosticHandler(func(event emberclient.Diagnostic) {
+    log.Printf("Ember diagnostic: kind=%s path=%s skipped=%d dropped=%d err=%v",
+        event.Kind, event.Path, event.SkippedRoots, event.DroppedNotifications, event.Err)
+})
+```
+
+## Element decoding APIs
 
 `ElementCollection.Populate` and the existing `GetElementCollection` methods retain the original element/value representation for existing callers. New code should use `DecodeRoot`, `ElementCollection.PopulateGlow250`, or `GetElementCollectionGlow250`; these preserve signed `int64` values and expose the complete Glow 2.50 model.
 
-`NewElementConnection` remains available as a compatibility alias. Prefer `NewElementCollection` in new code.
+Prefer `NewElementCollection` in new code.
 
 The protocol definition and reference implementations are available from [Lawo/ember-plus](https://github.com/Lawo/ember-plus).
